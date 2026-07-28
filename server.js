@@ -15,14 +15,15 @@ const path = require('path');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
+const { loadRuntimeConfig } = require('./src/config/runtime');
 
 // ─── Configuration ───────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-if (IS_PRODUCTION && !process.env.JWT_SECRET) throw new Error('JWT_SECRET must be set in production');
-const JWT_SECRET = process.env.JWT_SECRET || 'development-only-movo-jwt-secret';
+const runtime = loadRuntimeConfig({ ...process.env, DB_PATH: process.env.DB_PATH || path.join(__dirname, 'movo.db') });
+const PORT = runtime.port;
+const IS_PRODUCTION = runtime.production;
+const JWT_SECRET = runtime.jwtSecret;
 const JWT_EXPIRY = '7d';
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000').split(',').map(origin => origin.trim());
+const ALLOWED_ORIGINS = runtime.allowedOrigins;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -53,7 +54,7 @@ app.use('/business', express.static(path.join(__dirname, 'public', 'business')))
 app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
 
 // ─── Database Initialization ─────────────────────────────────
-const db = new Database(path.join(__dirname, 'movo.db'));
+const db = new Database(runtime.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
