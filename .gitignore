@@ -1,0 +1,18 @@
+# Secrets and local runtime configuration
+.env
+.env.*
+!.env.example
+
+# Runtime data and sensitive uploads
+movo.db
+movo.db-*
+uploads/
+logs/
+
+# Node and test artifacts
+node_modules/
+coverage/
+.playwright-cli/
+
+# Process manager state
+.pm2/

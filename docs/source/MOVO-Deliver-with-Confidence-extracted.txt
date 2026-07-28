@@ -1,0 +1,1692 @@
+
+
+===== PAGE 1 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+● ●  ● 
+●────●────● 
+│        ╲      │ 
+●──────●────● 
+MOVO  
+Business Overview 
+Rwanda’s Trusted Digital Logistics Platform 
+Parcel and Document Delivery 
+●──────────────●──────────────● 
+Kigali, Rwanda 
+July 2026 
+
+===== PAGE 2 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+Executive Summary 
+MOVO is an asset-light digital logistics marketplace designed to modernize same-day parcel and 
+document delivery in Kigali. The platform connects customers and businesses with verified 
+independent motorcycle riders, replacing informal coordination through phone calls and 
+messaging with transparent pricing, digital booking, live tracking, proof of delivery, and structured 
+rider management. 
+Rwanda provides a strong launch environment for MOVO because the country combines rapid 
+urbanization, deepening mobile adoption, supportive digital transformation policy, expanding 
+digital financial services, and a large base of motorcycle riders already e mbedded in daily urban 
+mobility. Kigali’s population reached 1,745,555 in the 2022 census, while Rwanda’s national 
+population reached 13,246,394, creating a growing urban demand base for reliable last -mile 
+logistics. 
+MOVO’s marketplace model is deliberately different from a traditional courier fleet. It does not 
+require heavy investment in owned vehicles or large delivery payrolls. Instead, MOVO supplies 
+the digital infrastructure, trust layer, operating standards, cus tomer support, pricing logic, and 
+transaction management that allow independent riders to serve individuals and organizations 
+professionally. 
+Positioning statement: MOVO is Rwanda’s Trusted Digital Logistics Platform—built to help 
+customers, businesses, and verified independent motorcycle riders Deliver with Confidence 
+through fast, secure, transparent, and professionally managed same-day logistics. 
+ 
+MOVO at a Glance 
+Company MOVO 
+Deliver with Confidence 
+Launch City Kigali 
+Market 
+Role 
+Digital logistics marketplace Operating 
+Model 
+Asset-light, rider -enabled, 
+platform-managed 
+Initial 
+Services 
+Parcel delivery and document 
+delivery 
+Technology 
+Stack 
+Customer app, rider app, business 
+portal, admin dashboard, pricing 
+engine, tracking, payments, and 
+proof of delivery 
+
+===== PAGE 3 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+Revenue 
+Logic 
+Platform fee per completed 
+delivery, with future business 
+subscriptions and value -
+added services 
+Long-Term 
+Vision 
+Rwanda’s trusted digital logistics 
+infrastructure, scalable across East 
+Africa 
+ 
+Why MOVO Matters 
+Urban delivery is becoming a critical operating layer for modern cities. Consumers expect 
+convenience, businesses need speed, and institutions still require secure movement of physical 
+documents. In Kigali, the demand exists, but delivery coordination ofte n remains fragmented 
+across informal calls, personal rider contacts, and manual payment arrangements. 
+MOVO matters because it converts fragmented delivery demand into a structured marketplace. 
+The platform gives customers convenience, businesses operational visibility, riders additional 
+income opportunities, and public stakeholders a more formalized, data -enabled logistics 
+ecosystem. 
+• For customers: faster same-day delivery, transparent pricing, tracking, and digital proof of 
+delivery. 
+• For businesses: reliable fulfilment, centralized delivery records, better customer 
+experience, and reduced internal coordination burden. 
+• For riders: more productive working hours, structured demand, digital reputation, and 
+additional earnings without losing independence. 
+• For Rwanda: a scalable logistics layer aligned with digital transformation, SME growth, 
+urban productivity, and smart city ambitions. 
+Market Context and Evidence 
+Kigali’s Urban Growth Creates Last-Mile Demand 
+Kigali has grown into Rwanda’s primary economic, administrative, education, health, and services 
+hub. According to the 2022 Rwanda Population and Housing Census, Kigali City had 1,745,555 
+residents, up from 1,132,686 in 2012. The same census recorded Rwanda’s national population at 
+13,246,394. This expanding urban base increases movement of goods, documents, retail purchases, 
+business supplies, and time-sensitive items across the city. 
+Digital Adoption Supports Platform Logistics 
+Rwanda’s mobile and digital payment infrastructure provides an enabling foundation for MOVO. 
+RURA reported 13,691,407 active mobile -cellular subscriptions in July 2024, equivalent to a 
+mobile penetration rate of 99.7 subscriptions per 100 inhabitants. Data  Reportal reported 4.91 
+
+===== PAGE 4 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+million internet users in Rwanda at the start of 2024, representing 34.4% internet penetration, and 
+12.29 million cellular mobile connections, equivalent to 86.2% of the population. 
+Mobile Money and Digital Financial Services Are Mainstreaming 
+Digital payments are becoming increasingly important to daily transactions. Rwanda FinScope 
+2024 found that 85.3% of adults were digitally included, up from 46% in 2016, with mobile money 
+and digital person -to-business payments among the main drivers. RURA -reported market 
+commentary for Q2 2024 also indicated 7.5 million active mobile money subscriptions as of June 
+2024, equal to 55.5 active mobile money accounts per 100 inhabitants. 
+SMEs Need Reliable Logistics Infrastructure 
+Rwanda’s private sector is dominated by small and micro enterprises. UNDP notes that small, 
+medium, and micro enterprises account for over 90% of businesses, contribute 55% to GDP, and 
+supply more than 60% of total employment. For these businesses, delivery is not merely a support 
+activity; it directly affects sales conversion, customer satisfaction, cash flow, and competitiveness. 
+Policy Tailwinds Support Digital Logistics 
+Rwanda’s Vision 2050 emphasizes economic transformation, modernized living standards, 
+competitiveness, integration, and urbanization. NST2 (2024 –2029) identifies digital 
+transformation, enhanced transport connectivity, urbanization, financial sector resili ence, and 
+productive jobs as strategic priorities. MOVO aligns with these themes by formalizing an urban 
+logistics use case that combines digital platforms, riders, SMEs, payments, and customer service. 
+Selected Market Signals Supporting MOVO 
+Signal Implication for MOVO 
+Kigali population: 1.75 million in 2022 Large urban demand base for same-day delivery 
+and business logistics. 
+Rwanda mobile penetration: 99.7 
+subscriptions per 100 inhabitants in July 
+2024 
+Strong foundation for app-based rider matching, 
+notifications, and mobile payments. 
+85.3% adult digital financial inclusion in 
+FinScope 2024 
+Growing readiness for digital payments, 
+transaction records, and platform-based services. 
+SMMEs represent over 90% of businesses Large addressable base of small businesses 
+requiring affordable delivery infrastructure. 
+ 
+
+===== PAGE 5 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+The Logistics Problem in Kigali 
+Kigali’s logistics market is active but still operationally fragmented. Many deliveries are arranged 
+through informal rider contacts, phone calls, WhatsApp messages, or ad hoc referrals. While this 
+approach can work for occasional deliveries, it creates several structural gaps on a scale. 
+• Pricing inconsistency: customers often negotiate delivery fees without standardized zones 
+or transparent estimates. 
+• Limited visibility: senders and recipients may not know where the rider is, when delivery 
+will arrive, or whether the item has been handed over. 
+• Trust gaps: informal arrangements make it difficult to verify rider identity, track disputes, 
+or establish repeatable service standards. 
+• Manual coordination burden:  businesses spend staff time calling riders, confirming 
+pickups, following up with customers, and recording delivery outcomes. 
+• Missed rider productivity: riders may spend time waiting for passenger trips while nearby 
+delivery demand remains unorganized. 
+The MOVO Solution 
+MOVO provides a standardized digital layer for same-day logistics. Customers request deliveries 
+through an app; the platform calculates pricing, matches the request with a verified independent 
+rider, tracks the journey, confirms delivery, processes payment , and records the transaction. 
+Businesses can use MOVO as a professional logistics partner without hiring riders or owning 
+motorcycles. 
+Core Value Proposition 
+Customer 
+Segment 
+Value Delivered 
+Individuals Convenient delivery of gifts, personal items, online purchases, forgotten 
+items, documents, and small packages without travelling across town. 
+Businesses Reliable same-day fulfilment, digital records, customer notifications, proof 
+of delivery, and reduced internal logistics workload. 
+Riders Additional earning opportunities, structured demand, digital reputation, 
+transparent jobs, and flexible participation as independent service providers. 
+Institutions Secure document movement, audit trail, delivery confirmation, and support 
+for time-sensitive administrative workflows. 
+ 
+
+===== PAGE 6 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+How MOVO Works 
+1. Request Customer enters pickup, destination, item type, recipient details, 
+and preferred payment method. 
+2. Price MOVO calculates a transparent delivery fee using zones, distance, 
+service type, urgency, and operating rules. 
+3. Match Nearby verified riders receive the request; the platform assigns or 
+confirms the most suitable rider. 
+4. Pickup The rider verifies the pickup using code, photo, or app confirmation 
+before collecting the parcel or document. 
+5. Track The sender and recipient receive live updates, status notifications, and 
+estimated arrival information. 
+6. Deliver The recipient confirms delivery through OTP, digital signature, photo 
+confirmation, or approved proof of delivery. 
+7. Settle Payment is completed, MOVO applies the platform fee, rider earnings 
+are recorded, and the delivery is stored in the customer history. 
+ 
+Delivery Lifecycle Diagram 
+Request → Price → Match → Pickup → Track → Deliver 
+ 
+Core Services 
+Parcel Delivery 
+MOVO Parcel Delivery enables individuals and businesses to move small and medium-sized items 
+across Kigali quickly, securely, and affordably. The service is designed for everyday consumer 
+needs as well as commercial fulfilment workflows that require speed but cannot justify a dedicated 
+delivery fleet. 
+• B2C retail fulfilment:  boutiques, pharmacies, electronics shops, and supermarkets can 
+deliver orders directly to customers. 
+• C2C deliveries:  individuals can send gifts, clothing, books, personal belongings, or 
+household items to friends and family. 
+• Small business orders: SMEs can fulfil Instagram, WhatsApp, marketplace, and website 
+orders without hiring full-time riders. 
+• Online shopping: merchants can offer same-day fulfilment for customers within Kigali. 
+
+===== PAGE 7 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Forgotten personal items: customers can recover and deliver keys, IDs, laptops, chargers, 
+bags, or documents left at home, work, hotels, or schools. 
+• Gift delivery: customers can send flowers, cakes, parcels, and personal packages with 
+delivery confirmation. 
+• Same-day parcel delivery: urgent citywide movement of goods where speed and visibility 
+are important. 
+Operational benefits: standardized pricing, verified riders, delivery tracking, digital receipts, 
+customer notifications, reduced phone coordination, and centralized transaction history. For small 
+businesses, this can convert delivery from a manual headache into a measurable o perating 
+capability. 
+Document Delivery 
+Despite digital transformation, many organizations continue to rely on physical documents for 
+compliance, signatures, tender submissions, notarization, banking, insurance, education, 
+healthcare, and government processes. MOVO Document Delivery provides a s ecure, trackable, 
+same-day solution for time-sensitive documents that must move physically. 
+• Banks and financial institutions:  account documents, loan files, signed forms, 
+compliance paperwork, cheques, and customer correspondence. 
+• Law firms: contracts, pleadings, notarized documents, court filings, client agreements, and 
+time-sensitive legal notices. 
+• Insurance companies: claims documents, policy files, signed forms, customer letters, and 
+broker submissions. 
+• Government institutions:  administrative forms, procurement documents, official 
+correspondence, and inter-office documentation. 
+• Universities and schools: certificates, transcripts, admissions documents, student records, 
+and official letters. 
+• Healthcare providers: referrals, laboratory forms, insurance documents, administrative 
+files, and non-clinical records. 
+• Corporate offices:  contracts, invoices, board documents, procurement files, HR 
+documents, and supplier paperwork. 
+• Tenders and procurement: submission packages, bid documents, signed approvals, and 
+deadline-sensitive files. 
+Why does physical document delivery remain important: not every workflow is fully 
+paperless; some documents require original signatures, seals, certified copies, wet stamps, or 
+physical submission. MOVO improves this legacy requirement by adding transparency, tracking, 
+proof of delivery, and accountability. 
+
+===== PAGE 8 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+Platform Ecosystem 
+MOVO functions as an ecosystem rather than a single courier product. The platform coordinates 
+four stakeholder groups: customers, businesses, riders, and MOVO operations. Each group 
+receives dedicated functionality while contributing data, demand, supply, and service quality to 
+the marketplace. 
+Customers Request deliveries, pay digitally, track riders, receive 
+confirmations, and rate service. 
+Businesses Manage orders, schedule deliveries, monitor fulfilment, access records, 
+and improve customer experience. 
+Riders Accept delivery jobs, navigate routes, confirm pickup and delivery, 
+receive earnings, and build reputation. 
+MOVO Provides technology, rider verification, pricing rules, service standards, 
+support, quality assurance, and marketplace governance. 
+ 
+Marketplace Business Model 
+MOVO’s business model is based on transaction volume, trust, and marketplace liquidity. Each 
+completed delivery generates a platform service fee while riders retain earnings for their work. 
+Over time, MOVO can extend monetization through business accounts,  scheduled deliveries, 
+subscription plans, priority support, API integrations, insurance partnerships, advertising for 
+merchants, and analytics dashboards. 
+Customer pays 
+delivery fee 
+→ MOVO 
+deducts 
+platform fee 
+→ Rider 
+receives 
+earnings 
+→ Platform reinvests in trust, 
+support, technology, and 
+growth 
+ 
+Technology Overview 
+The MOVO platform should be developed as a modular system that can support consumer 
+delivery, business logistics, rider operations, customer support, and platform administration from 
+launch. The initial technology scope should prioritize reliability, trans parency, and operational 
+control over unnecessary complexity. 
+• Customer application: delivery booking, price estimate, payment, tracking, notifications, 
+delivery history, support, and ratings. 
+
+===== PAGE 9 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Rider application: onboarding, job acceptance, navigation, pickup confirmation, delivery 
+confirmation, earnings, and performance dashboard. 
+• Business portal:  multi-user access, order creation, bulk delivery requests, scheduled 
+deliveries, digital receipts, and monthly reporting. 
+• Admin dashboard: rider verification, customer support, pricing configuration, delivery 
+monitoring, dispute handling, service zones, and analytics. 
+• Trust and safety layer: rider identity verification, delivery status logs, proof of delivery, 
+rating systems, and incident reporting. 
+Customer and Rider Journeys 
+Customer Journey Need identified → Delivery booked → Price confirmed → Rider 
+assigned → Pickup verified → Delivery tracked → Recipient 
+confirms → Receipt and rating stored 
+Rider Journey Verified onboarding → Availability switched on → Job received → 
+Pickup navigation → Item verified → Delivery completed → Earnings 
+recorded → Rating improves rider profile 
+ 
+Competitive Landscape 
+MOVO will operate in a market where customers already use alternatives, including informal moto 
+riders, traditional couriers, in -house delivery staff, ride -hailing platforms, merchant -owned 
+delivery arrangements, and personal errands. MOVO’s opportunity is not simply to “do delivery”; 
+it is to professionalize, standardize, and digitize delivery for use cases where reliability, 
+transparency, and proof matter. 
+Alternative Customer Limitation MOVO Differentiation 
+Informal rider 
+contacts 
+Inconsistent price, limited tracking, 
+weak accountability. 
+Verified riders, transparent pricing, 
+tracking, and proof of delivery. 
+Traditional 
+couriers 
+Potentially slower, less flexible for 
+small same-day jobs. 
+On-demand motorcycle delivery 
+optimized for city movement. 
+In-house riders Fixed cost, management burden, 
+idle capacity. 
+Variable-cost delivery capacity is 
+accessed through a platform. 
+Ride-hailing 
+platforms 
+Primarily designed for passenger 
+mobility, not business logistics 
+workflows. 
+Purpose-built parcel and document 
+delivery process with delivery 
+confirmation. 
+ 
+
+===== PAGE 10 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+Growth Strategy and Scalability 
+Phase 1: Kigali Launch Launch parcel and document delivery; onboard verified 
+riders; establish zones, pricing, support, and proof-of-
+delivery standards. 
+Phase 2: Business 
+Logistics 
+Introduce business accounts, scheduled deliveries, monthly 
+billing, bulk requests, delivery reporting, and dedicated support. 
+Phase 3: Platform 
+Expansion 
+Add multi-stop deliveries, API integrations, merchant tools, 
+value-added insurance, rider training, and advanced analytics. 
+Phase 4: National and 
+Regional Scale 
+Expand to secondary cities in Rwanda, then selected East African 
+urban markets where motorcycle logistics and mobile money 
+adoption create similar conditions. 
+ 
+Social and Economic Impact 
+MOVO has the potential to create value beyond commercial delivery revenue. By formalizing 
+same-day logistics, the platform can support SME productivity, reduce wasted time, improve rider 
+income opportunities, increase customer convenience, and contribute to Rwanda’s broader digital 
+economy agenda. 
+• SME enablement:  affordable outsourced delivery helps small businesses serve more 
+customers without heavy operating costs. 
+• Rider livelihoods:  independent riders gain access to structured delivery demand and 
+digital reputation signals. 
+• Urban productivity: customers and businesses reduce time spent moving items physically 
+across the city. 
+• Digital inclusion:  mobile booking, digital payments, and transaction records deepen 
+practical use of digital services. 
+• Data-enabled planning:  aggregated delivery patterns can eventually support better 
+understanding of urban movement and commercial activity. 
+Strategic Fit with Rwanda 
+Rwanda is an ideal launch market for MOVO because it combines a concentrated capital city, a 
+strong government commitment to digital transformation, high mobile connectivity, expanding 
+digital financial services, a growing SME base, and a policy environment that supports innovation, 
+urban modernization, and private-sector development. 
+
+===== PAGE 11 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+MOVO also aligns with Rwanda’s positioning as a technology and innovation hub in Africa. The 
+platform demonstrates how practical digital infrastructure can solve everyday urban problems 
+while creating commercial opportunities and measurable service improvements. 
+Mission, Vision, and Long-Term Platform Ambition 
+Mission: To simplify logistics by connecting individuals, businesses, and verified independent 
+riders through a trusted digital platform that enables every customer to Deliver with Confidence 
+through speed, transparency, and reliability. 
+Vision: To become Rwanda’s leading digital logistics platform and a trusted logistics marketplace 
+across East Africa. 
+Long-term ambition:  MOVO should evolve from an on -demand delivery app into a digital 
+logistics infrastructure layer that supports consumers, SMEs, corporates, institutions, riders, and 
+development partners across multiple logistics use cases. 
+Reference Sources 
+• National Institute of Statistics of Rwanda, Fifth Rwanda Population and Housing Census, 
+2022. 
+• Rwanda Utilities Regulatory Authority, Mobile-Cellular Telephone Subscriptions Report, 
+July 2024. 
+• DataReportal, Digital 2024: Rwanda. 
+• Access to Finance Rwanda, FinScope 2024 Digital Financial Services Thematic Report. 
+• Ministry of Finance and Economic Planning, Vision 2050. 
+• Ministry of Finance and Economic Planning, National Strategy for Transformation 2 
+(NST2), 2024–2029. 
+• United Nations Development Programme, Unlocking Rwanda’s Entrepreneurial Potential. 
+• Rwanda Development Board, 2024 Annual Report Highlights. 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+===== PAGE 12 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+● ●  ● 
+●────●────● 
+│        ╲      │ 
+●──────●────● 
+MOVO  
+App Overview & High Level 
+Architecture 
+Rwanda’s Trusted Digital Logistics Platform 
+Parcel and Document Delivery 
+●──────────────●──────────────● 
+Kigali, Rwanda 
+July 2026 
+ 
+
+===== PAGE 13 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+ 
+1. Introduction 
+MOVO is a digital logistics platform designed to connect individuals and businesses with verified 
+independent motorcycle riders for fast, secure, and transparent parcel and document delivery. 
+The MOVO platform will manage the complete delivery process, from booking and pricing to 
+rider assignment, live tracking, payment, proof of delivery, and customer support. 
+MOVO will initially launch in Kigali with two principal services: 
+• Parcel Delivery 
+• Document Delivery 
+The platform will operate as an asset-light digital marketplace. MOVO will not need to own a large 
+delivery fleet. Instead, verified riders will use their own motorcycles and access delivery 
+opportunities through the MOVO Rider Application. 
+The technology platform will consist of: 
+• MOVO Customer Application 
+• MOVO Rider Application 
+• MOVO Business Portal 
+• MOVO Operations and Administration Portal 
+• Central Backend Platform 
+• Payment and Communication Integrations 
+• Mapping, GPS, and Location Services 
+• Reporting and Analytics Systems 
+The platform must be secure, scalable, easy to use, and adapted to the operational realities of 
+Kigali. 
+ 
+2. Product Vision 
+MOVO aims to simplify urban logistics by providing one trusted platform through which 
+customers can request deliveries, riders can access earning opportunities, and businesses can 
+manage their logistics operations. 
+The platform should make every delivery: 
+
+===== PAGE 14 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Easy to request 
+• Transparently priced 
+• Assigned to a verified rider 
+• Trackable in real time 
+• Securely confirmed 
+• Digitally recorded 
+• Professionally supported 
+MOVO’s official brand promise is: 
+Deliver with Confidence 
+This promise should be reflected throughout customer experience, operational processes, 
+technology design, rider management, and support services. 
+ 
+3. Platform Objectives 
+The MOVO platform should achieve the following objectives: 
+3.1 Customer Convenience 
+Allow customers to request delivery in a few simple steps without needing to search manually for 
+a rider. 
+3.2 Transparent Pricing 
+Display the delivery price before the customer confirms the booking. 
+3.3 Efficient Rider Matching 
+Connect delivery requests with nearby verified riders based on location, availability, capacity, and 
+service requirements. 
+3.4 Delivery Visibility 
+Allow customers and businesses to follow the delivery journey from pickup to completion. 
+3.5 Secure Handover 
+Use pickup and delivery verification mechanisms to reduce disputes, fraud, loss, and mis delivery. 
+3.6 Rider Income Opportunities 
+Provide licensed and verified motorcycle riders with additional earning opportunities. 
+
+===== PAGE 15 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+3.7 Business Logistics Management 
+Allow companies to request, monitor, manage, and report multiple deliveries from one centralized 
+portal. 
+3.8 Operational Control 
+Provide MOVO’s internal team with complete visibility over users, riders, deliveries, payments, 
+complaints, and platform performance. 
+3.9 Scalability 
+Create a technology foundation that can later support additional services, cities, vehicle types, and 
+countries. 
+ 
+4. MOVO Platform Ecosystem 
+The MOVO ecosystem consists of four primary user -facing platforms supported by one central 
+technology infrastructure. 
+4.1 Customer Application 
+The Customer Application will allow individuals to request, manage, track, and pay for deliveries. 
+It will be available as a mobile application and may later be supported through a web -based 
+customer interface. 
+4.2 Rider Application 
+The Rider Application will allow verified riders to receive delivery requests, navigate to pick up 
+and destination locations, confirm delivery stages, manage earnings, and communicate with 
+customers. 
+4.3 Business Portal 
+The Business Portal will allow registered companies and institutions to create and manage multiple 
+deliveries, assign internal users, access invoices, and monitor delivery performance. 
+4.4 Administration and Operations Portal 
+The Administration Portal will allow the MOVO team to supervise platform operations, approve 
+riders, manage pricing, monitor deliveries, resolve disputes, process payments, and generate 
+reports. 
+4.5 Central Backend Platform 
+
+===== PAGE 16 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+The backend platform will connect all applications and manage the core system logic, data, 
+security, integrations, notifications, and reporting. 
+ 
+5. User Categories 
+5.1 Individual Customers 
+Individual users who request deliveries of personal parcels or documents. 
+Examples include: 
+• Families 
+• Students 
+• Professionals 
+• Online shoppers 
+• Individuals sending personal documents 
+• Customers sending gifts or forgotten items 
+5.2 Business Customers 
+Organizations requiring regular or occasional delivery services. 
+Examples include: 
+• Retail stores 
+• E-commerce businesses 
+• Law firms 
+• Banks 
+• Insurance companies 
+• Pharmacies 
+• Corporate offices 
+• Government institutions 
+• Universities 
+• Healthcare organizations 
+• Small and Medium Enterprises 
+
+===== PAGE 17 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+5.3 Riders 
+Licensed and verified motorcycle riders who use the MOVO platform to accept and complete 
+delivery assignments. 
+5.4 MOVO Operations Team 
+Internal staff responsible for: 
+• Customer support 
+• Rider onboarding 
+• Delivery monitoring 
+• Dispute resolution 
+• Payment reconciliation 
+• Quality assurance 
+• Fraud prevention 
+• Platform administration 
+5.5 System Administrators 
+Authorized technical personnel responsible for: 
+• User access management 
+• Platform configuration 
+• Security administration 
+• System monitoring 
+• Data management 
+• Integration management 
+ 
+6. MOVO Customer Application 
+6.1 Purpose 
+The Customer Application will provide individuals with a simple and reliable way to request parcel 
+and document deliveries. 
+6.2 Customer Registration 
+
+===== PAGE 18 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+Customers should be able to register using: 
+• Mobile phone number 
+• One-Time Password Verification 
+• Full name 
+• Email address, where available 
+• Preferred language 
+• Optional profile photograph 
+The application should support secure login and account recovery. 
+6.3 Home Screen 
+The home screen should provide quick access to: 
+• Send a Parcel 
+• Send a Document 
+• Track a Delivery 
+• Delivery History 
+• Saved Addresses 
+• Notifications 
+• Customer Support 
+6.4 Delivery Request 
+The customer should enter: 
+• Pickup location 
+• Pickup contact name 
+• Pickup contact telephone number 
+• Destination location 
+• Recipient name 
+• Recipient telephone number 
+• Delivery service type 
+• Parcel or document description 
+
+===== PAGE 19 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Preferred delivery time 
+• Additional rider instructions 
+The application should display the delivery price before confirmation. 
+6.5 Location Selection 
+Customers should be able to select locations through: 
+• Interactive map 
+• GPS location 
+• Saved address 
+• Searchable address 
+• Map pin placement 
+• Recognized landmark 
+• Manual delivery instructions 
+Because formal street addressing may not always be sufficient, the platform should support 
+landmark-based instructions and direct rider-customer communication. 
+6.6 Price Confirmation 
+Before the booking is submitted, the application should display: 
+• Delivery zone 
+• Delivery price 
+• Platform fee 
+• Estimated pickup time 
+• Estimated delivery time 
+• Applicable additional charges 
+The customer must approve the price before the request is sent to riders. 
+6.7 Rider Assignment 
+After booking confirmation, the system should search for a suitable available rider. 
+The customer should be able to view: 
+• Rider first name 
+
+===== PAGE 20 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Rider profile photograph 
+• Rider rating 
+• Motorcycle registration number 
+• Rider telephone contact 
+• Estimated arrival time 
+Sensitive rider information should be protected and disclosed only where operationally necessary. 
+6.8 Live Delivery Tracking 
+The customer should be able to follow the delivery on a live map. 
+Delivery statuses should include: 
+1. Request Created 
+2. Searching for Rider 
+3. Rider Assigned 
+4. Rider Going to Pickup 
+5. Rider Arrived at Pickup 
+6. Item Collected 
+7. Delivery in Progress 
+8. Rider Arrived at Destination 
+9. Delivery Completed 
+10. Delivery Cancelled or Failed 
+6.9 Pickup Verification 
+Pickup may be verified through: 
+• One-Time Password 
+• QR code 
+• Digital confirmation 
+• Pickup photograph 
+• Sender signature 
+The system should record the exact pickup time and location. 
+
+===== PAGE 21 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+6.10 Delivery Confirmation 
+Successful delivery may be confirmed through: 
+• Recipient One-Time Password 
+• Digital signature 
+• QR code 
+• Delivery photograph 
+• Recipient name 
+• Recorded delivery time and location 
+The system should automatically generate proof of delivery. 
+6.11 Payment 
+The Customer Application should support: 
+• Mobile Money 
+• Bank card 
+• Business account billing 
+• MOVO wallet, if introduced 
+• Cash, only where approved 
+Digital payments should be prioritized to improve transparency and reconciliation. 
+6.12 Ratings and Feedback 
+After delivery, customers should be able to rate: 
+• Rider professionalism 
+• Delivery speed 
+• Item handling 
+• Communication 
+• Overall experience 
+Customers should also be able to report a problem. 
+6.13 Delivery History 
+Customers should have access to: 
+
+===== PAGE 22 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Previous deliveries 
+• Delivery status 
+• Rider information 
+• Payment records 
+• Digital receipts 
+• Proof of delivery 
+• Rebooking option 
+ 
+7. MOVO Rider Application 
+7.1 Purpose 
+The Rider Application will enable verified riders to receive, accept, complete, and manage delivery 
+assignments. 
+7.2 Rider Registration 
+Rider registration should collect: 
+• Full legal name 
+• National identification number 
+• Mobile phone number 
+• Rider license information 
+• Motorcycle registration details 
+• Insurance details 
+• Profile photograph 
+• National ID photograph 
+• Driving permit 
+• Motorcycle ownership or authorization documents 
+• Emergency contact 
+• Bank or Mobile Money payment details 
+All riders should be reviewed and approved before receiving delivery requests. 
+
+===== PAGE 23 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+7.3 Rider Status 
+Riders should be able to select: 
+• Online and Available 
+• Busy 
+• Temporarily Unavailable 
+• Offline 
+Only eligible and available riders should receive delivery requests. 
+7.4 Delivery Request Notification 
+A rider should receive the following information before accepting: 
+• Pickup area 
+• Destination area 
+• Estimated distance 
+• Estimated time 
+• Service type 
+• Rider earnings 
+• Special handling requirements 
+• Time allowed to accept 
+The customer’s sensitive information should only be revealed after the rider accepts the request. 
+7.5 Delivery Acceptance 
+Once the rider accepts: 
+• The assignment should be temporarily locked to that rider. 
+• The customer should receive rider details. 
+• Navigation to the pickup point should begin. 
+• The rider should communicate through controlled in-app options. 
+7.6 Pickup Process 
+The rider should: 
+1. Navigate to the pickup point. 
+
+===== PAGE 24 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+2. Mark arrival. 
+3. Confirm the sender or pickup contact. 
+4. Inspect the parcel externally. 
+5. Confirm that the item meets MOVO requirements. 
+6. Complete pickup verification. 
+7. Mark the item as collected. 
+7.7 Delivery Process 
+After collection, the rider should: 
+1. Navigate to the destination. 
+2. Keep location services active. 
+3. Mark arrival. 
+4. Confirm the recipient. 
+5. Complete delivery verification. 
+6. Mark, the delivery as completed. 
+7.8 Rider Earnings 
+The Rider Application should show: 
+• Earnings per delivery 
+• Daily earnings 
+• Weekly earnings 
+• Monthly earnings 
+• Platform fees 
+• Bonuses 
+• Penalties, where applicable 
+• Pending payments 
+• Completed settlements 
+7.9 Rider Performance 
+The rider dashboard should display: 
+
+===== PAGE 25 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Completed deliveries 
+• Acceptance rate 
+• Cancellation rate 
+• Customer rating 
+• On-time delivery performance 
+• Reported incidents 
+• Account status 
+7.10 Rider Support and Safety 
+The application should include: 
+• Emergency support 
+• Incident reporting 
+• Customer support contact 
+• Delivery dispute reporting 
+• Accident reporting 
+• Unsafe item reporting 
+• Suspicious customer reporting 
+ 
+8. MOVO Business Portal 
+8.1 Purpose 
+Business Portal will allow corporate clients to manage deliveries at scale. 
+8.2 Business Registration 
+Businesses should provide: 
+• Registered company name 
+• Business registration number 
+• Tax identification number 
+• Physical address 
+• Primary contact person 
+
+===== PAGE 26 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Billing contact 
+• Authorized users 
+• Payment arrangement 
+8.3 Business Dashboard 
+The dashboard should display: 
+• Active deliveries 
+• Completed deliveries 
+• Failed deliveries 
+• Monthly delivery volume 
+• Monthly expenditure 
+• Average delivery time 
+• Delivery performance 
+• Recent activity 
+8.4 Delivery Creation 
+Businesses should be able to: 
+• Create one delivery 
+• Create multiple deliveries 
+• Upload deliveries in bulk 
+• Save frequent pickup locations 
+• Save customer addresses 
+• Schedule deliveries 
+• Create recurring delivery requests 
+8.5 User Management 
+A business administrator should be able to: 
+• Add employees 
+• Assign roles 
+• Setting spending limits 
+
+===== PAGE 27 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Approved delivery requests 
+• Restrict access 
+• View user activity 
+8.6 Billing and Reporting 
+The portal should provide: 
+• Digital invoices 
+• Monthly statements 
+• Delivery reports 
+• Cost reports 
+• Proof of delivery 
+• Downloadable records 
+• Department-level expenditure 
+• User-level expenditure 
+8.7 Corporate Service-Level Agreements 
+Selected business clients may receive: 
+• Priority rider allocation 
+• Dedicated customer support 
+• Monthly billing 
+• Agreed service standards 
+• Customized reporting 
+• Account management 
+ 
+9. Administration and Operations Portal 
+9.1 Purpose 
+The Administration Portal will provide MOVO with centralized operational control. 
+9.2 Operations Dashboard 
+The dashboard should show: 
+
+===== PAGE 28 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Active deliveries 
+• Available riders 
+• Riders currently delivering 
+• Pending rider approvals 
+• Failed deliveries 
+• Delayed deliveries 
+• Customer complaints 
+• Daily platform revenue 
+• Daily rider earnings 
+• Payment exceptions 
+• System alerts 
+9.3 Live Operations Map 
+Operations staff should be able to view: 
+• Active riders 
+• Active deliveries 
+• Pickup locations 
+• Destination locations 
+• Delivery routes 
+• Delayed orders 
+• High-demand areas 
+• Rider supply gaps 
+9.4 User Management 
+Administrators should be able to: 
+• View customer accounts 
+• Suspend fraudulent accounts 
+• Review business accounts 
+• Reset access 
+
+===== PAGE 29 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Manage roles 
+• Review of user activity 
+9.5 Rider Management 
+Administrators should be able to: 
+• Review rider applications 
+• Verify documents 
+• Approve riders 
+• Suspend riders 
+• Monitor rider performance 
+• Manage rider categories 
+• Review incidents 
+• Manage rider settlements 
+9.6 Delivery Management 
+Administrators should be able to: 
+• View complete delivery information 
+• Reassign a delivery 
+• Cancel a delivery 
+• Adjust delivery status 
+• Contact the rider or customer 
+• Investigate disputes 
+• Review of GPS history 
+• View proof of pickup 
+• View proof of delivery 
+All manual administrative changes should be recorded in an audit log. 
+9.7 Pricing Management 
+Authorized administrators should be able to configure: 
+• Delivery zones 
+
+===== PAGE 30 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Zone prices 
+• Platform fees 
+• Rider earnings 
+• Service charges 
+• Waiting fees 
+• Cancellation fees 
+• Promotional discounts 
+• Business pricing agreements 
+Pricing changes should not require application redevelopment. 
+9.8 Customer Support 
+The platform should support: 
+• Support tickets 
+• Delivery complaints 
+• Lost item reports 
+• Payment complaints 
+• Rider complaints 
+• Refund requests 
+• Service quality reports 
+9.9 Financial Administration 
+The portal should provide: 
+• Delivery payment records 
+• Rider earnings 
+• Platform fees 
+• Refund records 
+• Mobile Money reconciliation 
+• Business invoices 
+• Outstanding balances 
+
+===== PAGE 31 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Settlement reports 
+ 
+10. Core Delivery Lifecycle 
+Every MOVO delivery should pass through a standardized lifecycle. 
+Stage 1: Request Creation 
+The customer provides the pickup, destination, service type, and delivery details. 
+Stage 2: Pricing 
+The system calculates the customer price and rider earnings. 
+Stage 3: Rider Matching 
+The platform identifies eligible riders and sends the request. 
+Stage 4: Rider Assignment 
+A rider accepts and is assigned to the delivery. 
+Stage 5: Pickup 
+The rider travels to the pickup location and verifies collection. 
+Stage 6: In Transit 
+The rider transports the parcel or document while the system records location updates. 
+Stage 7: Delivery 
+The rider arrives at the destination and verifies the recipient. 
+Stage 8: Completion 
+The system confirms delivery and generates proof of delivery. 
+Stage 9: Settlement 
+Payment is allocated between the rider and MOVO according to the configured pricing model. 
+Stage 10: Rating and Support 
+The customer rates the delivery and may report any issue. 
+ 
+11. High-Level System Architecture 
+11.1 Architecture Principles 
+
+===== PAGE 32 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+The MOVO architecture should be designed according to the following principles: 
+• Mobile-first 
+• Secure by design 
+• API-driven 
+• Cloud-ready 
+• Modular 
+• Scalable 
+• Highly available 
+• Easy to maintain 
+• Configurable 
+• Observable 
+• Integration-ready 
+11.2 Main Architecture Layers 
+The system should contain six main layers: 
+Layer 1: User Applications 
+• Customer Mobile Application 
+• Rider Mobile Application 
+• Business Web Portal 
+• Administration Web Portal 
+Layer 2: API and Access Layer 
+• API Gateway 
+• Authentication Service 
+• Authorization Service 
+• Rate Limiting 
+• Request Validation 
+• Device and Session Management 
+Layer 3: Core Business Services 
+
+===== PAGE 33 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• User Management Service 
+• Rider Management Service 
+• Business Account Service 
+• Delivery Management Service 
+• Dispatch and Matching Service 
+• Pricing Service 
+• Tracking Service 
+• Payment Service 
+• Notification Service 
+• Rating and Review Service 
+• Customer Support Service 
+• Reporting Service 
+Layer 4: Data Layer 
+• Relational Database 
+• Real-Time Location Data Store 
+• Cache 
+• Document Storage 
+• Audit Log Storage 
+• Analytics Database 
+• Backup Storage 
+Layer 5: External Integrations 
+• Mapping and Navigation Provider 
+• Mobile Money Providers 
+• Banking and Card Payment Gateway 
+• SMS Provider 
+• Email Provider 
+• Push Notification Provider 
+
+===== PAGE 34 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Identity Verification Services 
+• Government or regulatory verification systems, where available 
+Layer 6: Infrastructure and Operations 
+• Cloud Hosting 
+• Application Monitoring 
+• Error Tracking 
+• Security Monitoring 
+• Automated Backups 
+• Disaster Recovery 
+• Deployment Pipeline 
+• System Logs 
+• Performance Monitoring 
+ 
+12. Conceptual Architecture Diagram 
+The MOVO platform should follow the structure below: 
+CUSTOMERS 
+↓ 
+MOVO Customer Mobile Application 
+↓ 
+API Gateway and Authentication 
+↓ 
+Core MOVO Platform Services 
+↓ 
+Delivery Management | Pricing | Dispatch | Tracking | Payments | Notifications 
+↓ 
+Central Data Platform 
+↓ 
+External Services: Maps | Mobile Money | SMS | Email | Identity Verification 
+RIDERS 
+↓ 
+MOVO Rider Mobile Application 
+↓ 
+
+===== PAGE 35 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+API Gateway and Authentication 
+↓ 
+Dispatch | Navigation | Tracking | Earnings | Delivery Verification 
+BUSINESSES 
+↓ 
+MOVO Business Web Portal 
+↓ 
+Delivery Management | Billing | Reporting | User Management 
+MOVO OPERATIONS 
+↓ 
+Administration and Operations Portal 
+↓ 
+Live Monitoring | Rider Management | Pricing | Support | Payments | Analytics 
+ 
+13. Core Backend Services 
+13.1 Authentication Service 
+Responsible for: 
+• Registration 
+• Login 
+• OTP verification 
+• Password management 
+• Session management 
+• Device management 
+• Multi-factor authentication 
+• Access tokens 
+13.2 User Management Service 
+Responsible for: 
+• Customer profiles 
+• Rider profiles 
+• Business profiles 
+
+===== PAGE 36 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Staff accounts 
+• Roles and permissions 
+• Account status 
+13.3 Delivery Management Service 
+Responsible for: 
+• Delivery creation 
+• Status management 
+• Pickup details 
+• Destination details 
+• Delivery history 
+• Cancellation 
+• Proof of delivery 
+13.4 Pricing Service 
+Responsible for: 
+• Zone identification 
+• Fixed pricing 
+• Platform fees 
+• Rider earnings 
+• Additional charges 
+• Promotions 
+• Business pricing 
+13.5 Dispatch and Matching Service 
+Responsible for identifying and selecting suitable riders using criteria such as: 
+• Rider distance from pickup 
+• Rider availability 
+• Rider status 
+• Rider performance 
+
+===== PAGE 37 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Delivery type 
+• Rider capacity 
+• Current workload 
+• Service area 
+13.6 Tracking Service 
+Responsible for: 
+• Rider location updates 
+• Live map display 
+• Route recording 
+• Estimated arrival times 
+• Delivery location history 
+• Geofence events 
+13.7 Payment Service 
+Responsible for: 
+• Payment initiation 
+• Payment confirmation 
+• Failed payment handling 
+• Refunds 
+• Rider earnings 
+• MOVO platform fee allocation 
+• Business billing 
+• Reconciliation 
+13.8 Notification Service 
+Responsible for: 
+• Push notifications 
+• SMS notifications 
+• Email notifications 
+
+===== PAGE 38 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Delivery alerts 
+• Payment alerts 
+• Rider request alerts 
+• Support alerts 
+13.9 Proof of Delivery Service 
+Responsible for: 
+• OTP verification 
+• Digital signatures 
+• Photographs 
+• Recipient identification 
+• Delivery timestamps 
+• GPS coordinates 
+• Delivery certificates 
+13.10 Rating and Quality Service 
+Responsible for: 
+• Customer ratings 
+• Rider ratings 
+• Service quality monitoring 
+• Performance scoring 
+• Complaint identification 
+ 
+14. Data Architecture 
+The system will manage several key categories of data. 
+14.1 User Data 
+• Identity 
+• Contact details 
+• Account status 
+
+===== PAGE 39 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Preferences 
+• Roles 
+• Verification information 
+14.2 Delivery Data 
+• Pickup location 
+• Destination 
+• Delivery type 
+• Parcel description 
+• Rider assignment 
+• Status history 
+• Time records 
+• Proof of delivery 
+14.3 Location Data 
+• Rider coordinates 
+• Route history 
+• Pickup coordinates 
+• Destination coordinates 
+• Geofence events 
+14.4 Financial Data 
+• Customer payments 
+• Rider earnings 
+• Platform fees 
+• Refunds 
+• Business invoices 
+• Settlements 
+14.5 Operational Data 
+• Rider availability 
+
+===== PAGE 40 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Delivery performance 
+• Support tickets 
+• Complaints 
+• Incidents 
+• System activity 
+14.6 Audit Data 
+• Administrative actions 
+• Login history 
+• Status changes 
+• Pricing changes 
+• Financial adjustments 
+• Account suspensions 
+ 
+15. Security Architecture 
+Security must be incorporated into every layer of the MOVO platform. 
+15.1 Identity and Access Security 
+The platform should be used: 
+• OTP-based mobile verification 
+• Strong password controls 
+• Role-based access control 
+• Multi-factor authentication for administrators 
+• Secure session management 
+• Account lockout controls 
+15.2 Data Protection 
+Sensitive data should be: 
+• Encrypted during transmission 
+• Encrypted while stored 
+
+===== PAGE 41 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Accessible only to authorized users 
+• Protected through data retention rules 
+• Backed up securely 
+15.3 Payment Security 
+MOVO should avoid storing sensitive cards or Mobile Money credentials directly. 
+Payments should be processed through approved and secure payment providers. 
+15.4 Application Security 
+The system should include: 
+• Secure API authentication 
+• Input validation 
+• Protection against common application attacks 
+• Rate limiting 
+• Fraud detection 
+• Device monitoring 
+• Security logging 
+15.5 Operational Security 
+Administrative actions should require proper authorization and should be recorded in tamper -
+resistant audit logs. 
+ 
+16. Reliability and Scalability 
+The platform should be designed to remain stable as delivery volumes increase. 
+Key requirements include: 
+• Automatic scaling 
+• Database backups 
+• Disaster recovery 
+• High system availability 
+• Queued background processing 
+
+===== PAGE 42 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Failure recovery 
+• Real-time monitoring 
+• Performance alerts 
+• Redundant infrastructure 
+The architecture should support expansion from hundreds to thousands of deliveries per day 
+without requiring a complete system redesign. 
+ 
+17. Low-Connectivity Considerations 
+The MOVO platform must account for inconsistent mobile connectivity. 
+The Rider Application should support: 
+• Temporary offline operation 
+• Local storage of delivery information 
+• Automatic synchronization when connectivity returns 
+• Low-data map display 
+• SMS fallback for critical notifications 
+• Retry mechanisms for failed status updates 
+• Clear connectivity status indicators 
+Critical delivery events should not be lost when the rider temporarily loses internet access. 
+ 
+18. Language and Accessibility 
+The platform should initially support: 
+• English 
+• Kinyarwanda 
+French may be added later depending on market demand. 
+The user interface should use: 
+• Simple language 
+• Clear icons 
+
+===== PAGE 43 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Large action buttons 
+• Minimal data entry 
+• Clear delivery status descriptions 
+• Accessible color contrast 
+ 
+19. Recommended MVP Scope 
+The first MOVO release should focus only on essential functionality. 
+Customer Application MVP 
+• Customer registration 
+• Parcel delivery request 
+• Document delivery request 
+• Zone-based pricing 
+• Rider assignment 
+• Live tracking 
+• Mobile Money payment 
+• OTP delivery confirmation 
+• Delivery history 
+• Ratings 
+• Customer support 
+Rider Application MVP 
+• Rider registration 
+• Document upload 
+• Approval status 
+• Online and offline status 
+• Delivery request acceptance 
+• Navigation 
+
+===== PAGE 44 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Pickup confirmation 
+• Delivery confirmation 
+• Earnings dashboard 
+• Support and incident reporting 
+Business Portal MVP 
+• Business registration 
+• Delivery creation 
+• Delivery tracking 
+• Delivery history 
+• Proof of delivery 
+• Monthly statement 
+• Basic user management 
+Administration Portal MVP 
+• Customer management 
+• Rider approval 
+• Live delivery monitoring 
+• Delivery management 
+• Zone and pricing management 
+• Payment monitoring 
+• Support ticket management 
+• Basic operational reporting 
+ 
+20. Functions to Defer Until Later Phases 
+The following features should not delay the initial launch: 
+• Artificial intelligence route optimization 
+• Advanced demand forecasting 
+
+===== PAGE 45 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Subscription packages 
+• Loyalty programs 
+• MOVO digital wallet 
+• Multi-stop delivery 
+• Van and truck logistics 
+• Intercity logistics 
+• Automated corporate credit 
+• Complex promotional systems 
+• International expansion features 
+• Advanced insurance products 
+These functions can be introduced after MOVO validates customer demand and operational 
+performance. 
+ 
+21. Future Platform Expansion 
+The MOVO architecture should eventually support: 
+• Scheduled delivery 
+• Multi-stop delivery 
+• E-commerce fulfilment 
+• Pharmacy delivery 
+• Grocery delivery 
+• Van delivery 
+• Truck logistics 
+• Intercity delivery 
+• API integration with online businesses 
+• Merchant plugins 
+• Rider insurance 
+• Rider financing 
+
+===== PAGE 46 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Business subscriptions 
+• Cross-border logistics 
+ 
+22. Key Performance Indicators 
+The platform should track: 
+Customer KPIs 
+• Registered customers 
+• Active customers 
+• Repeat customer rate 
+• Customer acquisition cost 
+• Customer satisfaction 
+• Average rating 
+Delivery KPIs 
+• Delivery requests 
+• Completed deliveries 
+• Completion rate 
+• Average pickup time 
+• Average delivery time 
+• Cancellation rate 
+• Failed delivery rate 
+• On-time delivery rate 
+Rider KPIs 
+• Active riders 
+• Deliveries per rider 
+• Rider acceptance rate 
+• Rider cancellation rate 
+
+===== PAGE 47 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Rider earnings 
+• Rider retention 
+• Rider rating 
+Financial KPIs 
+• Gross delivery value 
+• Platform revenue 
+• Average platform fee 
+• Rider payouts 
+• Payment success rate 
+• Refund rate 
+• Revenue per active customer 
+Operational KPIs 
+• Support tickets 
+• Complaint rate 
+• Incident rate 
+• Average resolution time 
+• System uptime 
+• Application response time 
+ 
+23. Development Approach 
+The MOVO platform should be developed in phases. 
+Phase 1: Product Definition 
+• Confirm business rules 
+• Confirm delivery zones 
+• Confirm pricing 
+• Map user journeys 
+
+===== PAGE 48 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+• Define MVP requirements 
+• Prepare interface designs 
+• Approving system architecture 
+Phase 2: MVP Development 
+• Build Customer Application 
+• Build Rider Application 
+• Build Administration Portal 
+• Build basic Business Portal 
+• Integrate maps 
+• Integrate payments 
+• Integrate notifications 
+Phase 3: Internal Testing 
+• Functional testing 
+• Security testing 
+• Payment testing 
+• GPS tracking testing 
+• Rider workflow testing 
+• Operations testing 
+Phase 4: Controlled Pilot 
+Launch with a limited number of: 
+• Customers 
+• Riders 
+• Businesses 
+• Delivery zones 
+Phase 5: Kigali Launch 
+Expand availability across the approved Kigali service area. 
+
+===== PAGE 49 =====
+
+ 
+MOVO | Deliver with Confidence Business Overview 
+ 
+Phase 6: Optimization and Expansion 
+Use platform data and operational feedback to improve: 
+• Pricing 
+• Rider matching 
+• Customer experience 
+• Delivery performance 
+• Business services 
+• Geographic coverage 
+ 
+24. Conclusion 
+The MOVO platform will be the central operating infrastructure of the business. 
+Its success will depend not only on attractive mobile applications, but also on strong business rules, 
+reliable dispatch, secure delivery verification, accurate payments, rider management, customer 
+support, and operational visibility. 
+The proposed architecture gives MOVO a practical foundation for launching Parcel Delivery and 
+Document Delivery in Kigali while remaining flexible enough to support future services and 
+geographic expansion. 
+By combining technology, verified riders, standardized operations, transparent pricing, and secure 
+delivery processes, MOVO will enable customers and businesses to: 
+Deliver with Confidence. 
+ 

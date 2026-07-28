@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MOVO Admin</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<script>
+tailwind.config={theme:{extend:{colors:{movo:{50:'#f0faf4',100:'#d1f2e0',200:'#a3e4c1',300:'#5fcea0',400:'#2eb57a',500:'#0A6847',600:'#085438',700:'#06402a'},gold:{400:'#F5C842',500:'#F2B705'},danger:{500:'#DC2626'}},fontFamily:{display:['Space Grotesk','sans-serif'],body:['DM Sans','sans-serif']}}}}
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:'DM Sans',sans-serif;background:#f0faf4}
+.view{display:none}.view.active{display:flex}
+.btn-primary{background:#0A6847;color:#fff;border:none;padding:.6rem 1.2rem;border-radius:10px;font-weight:600;cursor:pointer;transition:all .2s;font-size:.85rem}
+.btn-primary:hover{background:#085438}.btn-secondary{background:#fff;color:#0A6847;border:2px solid #0A6847;padding:.6rem 1.2rem;border-radius:10px;font-weight:600;cursor:pointer;transition:all .2s;font-size:.85rem}
+.btn-danger{background:#DC2626;color:#fff;border:none;padding:.6rem 1.2rem;border-radius:10px;font-weight:600;cursor:pointer;font-size:.85rem}
+.btn-sm{padding:.4rem .8rem;font-size:.78rem;border-radius:8px}
+.input-field{width:100%;padding:.6rem .9rem;border:2px solid #e5e7eb;border-radius:10px;font-size:.85rem;font-family:inherit;transition:border-color .2s;background:#fff}
+.input-field:focus{outline:none;border-color:#0A6847}
+.card{background:#fff;border-radius:14px;padding:1.1rem;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.sidebar{width:260px;background:#fff;border-right:1px solid #e5e7eb;height:100vh;position:fixed;left:0;top:0;z-index:50;overflow-y:auto}
+.main{margin-left:260px;flex:1;min-height:100vh}
+.nav-btn{width:100%;text-align:left;padding:.65rem 1rem;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;gap:.7rem;font-size:.88rem;font-weight:500;color:#6b7280;border-radius:10px;margin:2px 8px;transition:all .15s;font-family:inherit}
+.nav-btn:hover{background:#f0faf4;color:#0A6847}.nav-btn.active{background:#0A6847;color:#fff}
+.nav-btn i{width:20px;text-align:center}
+.map-container{height:400px;border-radius:14px;overflow:hidden;border:2px solid #e5e7eb}
+.leaflet-container{height:100%;width:100%}
+.fade-in{animation:fadeIn .25s ease}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.toast{position:fixed;top:1rem;right:1rem;background:#0A6847;color:#fff;padding:.65rem 1.2rem;border-radius:10px;font-weight:500;z-index:10000;transform:translateX(120%);transition:transform .3s;font-size:.88rem}
+.toast.show{transform:translateX(0)}.toast.error{background:#DC2626}
+table{width:100%;border-collapse:collapse}th{text-align:left;padding:.55rem .5rem;font-size:.72rem;font-weight:600;color:#6b7280;border-bottom:2px solid #e5e7eb;text-transform:uppercase;letter-spacing:.03em}
+td{padding:.55rem .5rem;font-size:.83rem;border-bottom:1px solid #f3f4f6;color:#374151}tr:hover td{background:#f0faf4}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal-content{background:#fff;border-radius:16px;padding:1.5rem;max-width:500px;width:90%;max-height:85vh;overflow-y:auto}
+.kpi-card{background:#fff;border-radius:14px;padding:1rem 1.2rem;box-shadow:0 1px 3px rgba(0,0,0,.06);border-left:4px solid #0A6847}
+.status-badge{display:inline-flex;align-items:center;gap:.25rem;padding:.2rem .6rem;border-radius:16px;font-size:.72rem;font-weight:600}
+@media(max-width:1024px){.sidebar{width:60px}.sidebar .nav-label,.sidebar h2,.sidebar .sidebar-footer{display:none}.nav-btn{justify-content:center;padding:.7rem}.nav-btn i{width:auto}}
+</style>
+</head>
+<body>
+
+<div id="toast" class="toast"></div>
+
+<!-- AUTH -->
+<div id="view-auth" class="view active" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#0A6847 0%,#042c1c 100%)">
+  <div class="bg-white rounded-2xl p-8 shadow-xl fade-in" style="width:360px">
+    <div class="text-center mb-6"><h1 class="text-3xl font-bold font-display text-movo-500">MOVO</h1><p class="text-gray-500 text-sm">Administration Portal</p></div>
+    <div class="space-y-3">
+      <input id="login-phone" class="input-field" placeholder="Admin phone" value="+250780000000">
+      <input id="login-password" class="input-field" type="password" placeholder="Password" value="Admin@2026">
+      <button onclick="handleLogin()" class="btn-primary w-full py-3">Sign In</button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN ADMIN -->
+<div id="view-app" class="view">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="p-4 border-b border-gray-100">
+      <h2 class="text-xl font-bold font-display text-movo-500">MOVO</h2>
+      <p class="text-xs text-gray-400 nav-label">Operations Center</p>
+    </div>
+    <div class="p-2 space-y-0.5 mt-2">
+      <button class="nav-btn active" data-page="dashboard" onclick="showPage('dashboard')"><i class="fas fa-chart-pie"></i><span class="nav-label">Dashboard</span></button>
+      <button class="nav-btn" data-page="live-map" onclick="showPage('live-map')"><i class="fas fa-map-marked-alt"></i><span class="nav-label">Live Map</span></button>
+      <button class="nav-btn" data-page="deliveries" onclick="showPage('deliveries')"><i class="fas fa-box"></i><span class="nav-label">Deliveries</span></button>
+      <button class="nav-btn" data-page="riders" onclick="showPage('riders')"><i class="fas fa-motorcycle"></i><span class="nav-label">Riders</span></button>
+      <button class="nav-btn" data-page="customers" onclick="showPage('customers')"><i class="fas fa-users"></i><span class="nav-label">Customers</span></button>
+      <button class="nav-btn" data-page="businesses" onclick="showPage('businesses')"><i class="fas fa-building"></i><span class="nav-label">Businesses</span></button>
+      <button class="nav-btn" data-page="zones" onclick="showPage('zones')"><i class="fas fa-map"></i><span class="nav-label">Zones</span></button>
+      <button class="nav-btn" data-page="pricing" onclick="showPage('pricing')"><i class="fas fa-tags"></i><span class="nav-label">Pricing</span></button>
+      <button class="nav-btn" data-page="finances" onclick="showPage('finances')"><i class="fas fa-coins"></i><span class="nav-label">Finances</span></button>
+      <button class="nav-btn" data-page="tickets" onclick="showPage('tickets')"><i class="fas fa-headset"></i><span class="nav-label">Support</span></button>
+    </div>
+    <div class="sidebar-footer absolute bottom-0 left-0 right-0 p-3 border-t border-gray-100">
+      <button onclick="handleLogout()" class="nav-btn text-red-500 hover:bg-red-50"><i class="fas fa-sign-out-alt"></i><span class="nav-label">Logout</span></button>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main">
+    <!-- Top bar -->
+    <div class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-40">
+      <h1 class="text-lg font-bold font-display text-gray-900" id="page-title">Dashboard</h1>
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-gray-500" id="admin-name">Admin</span>
+        <div class="w-8 h-8 rounded-full bg-movo-500 flex items-center justify-center text-white text-sm font-bold">A</div>
+      </div>
+    </div>
+
+    <div class="p-6">
+      <!-- Dashboard -->
+      <div id="page-dashboard" class="page active fade-in">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div class="kpi-card"><p class="text-xs text-gray-500 uppercase tracking-wide">Active Deliveries</p><p class="text-3xl font-bold font-display text-movo-500 mt-1" id="kpi-active">0</p></div>
+          <div class="kpi-card" style="border-left-color:#F2B705"><p class="text-xs text-gray-500 uppercase tracking-wide">Today Completed</p><p class="text-3xl font-bold font-display text-gold-500 mt-1" id="kpi-today">0</p></div>
+          <div class="kpi-card" style="border-left-color:#3b82f6"><p class="text-xs text-gray-500 uppercase tracking-wide">Online Riders</p><p class="text-3xl font-bold font-display text-blue-500 mt-1" id="kpi-riders">0</p></div>
+          <div class="kpi-card" style="border-left-color:#8b5cf6"><p class="text-xs text-gray-500 uppercase tracking-wide">Today Revenue</p><p class="text-3xl font-bold font-display text-purple-500 mt-1" id="kpi-revenue">0</p></div>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div class="kpi-card"><p class="text-xs text-gray-500">Total Customers</p><p class="text-xl font-bold font-display mt-1" id="kpi-customers">0</p></div>
+          <div class="kpi-card"><p class="text-xs text-gray-500">Total Riders</p><p class="text-xl font-bold font-display mt-1" id="kpi-total-riders">0</p></div>
+          <div class="kpi-card"><p class="text-xs text-gray-500">Pending Approvals</p><p class="text-xl font-bold font-display text-orange-500 mt-1" id="kpi-pending">0</p></div>
+          <div class="kpi-card"><p class="text-xs text-gray-500">Open Tickets</p><p class="text-xl font-bold font-display text-red-500 mt-1" id="kpi-tickets">0</p></div>
+        </div>
+        <div class="grid lg:grid-cols-2 gap-4">
+          <div class="card"><h3 class="font-bold font-display text-gray-900 mb-3">Month Summary</h3>
+            <div class="space-y-2"><div class="flex justify-between text-sm"><span class="text-gray-500">Month Deliveries</span><span class="font-bold" id="kpi-month-del">0</span></div>
+            <div class="flex justify-between text-sm"><span class="text-gray-500">Month Revenue</span><span class="font-bold text-movo-500" id="kpi-month-rev">0</span></div>
+            <div class="flex justify-between text-sm"><span class="text-gray-500">Total Businesses</span><span class="font-bold" id="kpi-businesses">0</span></div></div>
+          </div>
+          <div class="card"><h3 class="font-bold font-display text-gray-900 mb-3">Quick Actions</h3>
+            <div class="grid grid-cols-2 gap-2">
+              <button onclick="showPage('riders')" class="btn-secondary btn-sm text-left"><i class="fas fa-user-check mr-2"></i>Approve Riders</button>
+              <button onclick="showPage('deliveries')" class="btn-secondary btn-sm text-left"><i class="fas fa-search mr-2"></i>Monitor Deliveries</button>
+              <button onclick="showPage('live-map')" class="btn-secondary btn-sm text-left"><i class="fas fa-map mr-2"></i>Live Map</button>
+              <button onclick="showPage('tickets')" class="btn-secondary btn-sm text-left"><i class="fas fa-headset mr-2"></i>Support Queue</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Map -->
+      <div id="page-live-map" class="page fade-in">
+        <div class="map-container" id="admin-map"></div>
+        <div class="grid grid-cols-2 gap-4 mt-4">
+          <div class="card"><h3 class="font-bold text-sm text-gray-900 mb-2">Online/Busy Riders (<span id="map-rider-count">0</span>)</h3>
+            <div id="map-rider-list" class="space-y-1 max-h-60 overflow-y-auto text-sm"></div>
+          </div>
+          <div class="card"><h3 class="font-bold text-sm text-gray-900 mb-2">Active Deliveries (<span id="map-del-count">0</span>)</h3>
+            <div id="map-del-list" class="space-y-1 max-h-60 overflow-y-auto text-sm"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Deliveries -->
+      <div id="page-deliveries" class="page fade-in">
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+          <input id="del-search" class="input-field" style="width:250px" placeholder="Search orders, addresses..." oninput="loadAdminDeliveries()">
+          <select id="del-filter" class="input-field" style="width:160px" onchange="loadAdminDeliveries()">
+            <option value="">All Status</option>
+            <option>created</option><option>searching</option><option>assigned</option><option>going_pickup</option>
+            <option>arrived_pickup</option><option>picked_up</option><option>in_transit</option><option>arrived_dest</option>
+            <option>delivered</option><option>cancelled</option><option>failed</option>
+          </select>
+        </div>
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>Order</th><th>Customer</th><th>Rider</th><th>Type</th><th>Status</th><th>Amount</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody id="admin-del-tbody"><tr><td colspan="8" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+        </div>
+      </div>
+
+      <!-- Riders -->
+      <div id="page-riders" class="page fade-in">
+        <div class="flex gap-3 mb-4">
+          <input id="rider-search" class="input-field" style="width:250px" placeholder="Search riders..." oninput="loadRiders()">
+          <select id="rider-filter" class="input-field" style="width:160px" onchange="loadRiders()">
+            <option value="">All</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option>
+          </select>
+        </div>
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>Name</th><th>Phone</th><th>Plate</th><th>Rating</th><th>Deliveries</th><th>Earnings</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="rider-tbody"><tr><td colspan="8" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+        </div>
+      </div>
+
+      <!-- Customers -->
+      <div id="page-customers" class="page fade-in">
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Status</th><th>Joined</th></tr></thead>
+          <tbody id="customer-tbody"><tr><td colspan="5" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+        </div>
+      </div>
+
+      <!-- Businesses -->
+      <div id="page-businesses" class="page fade-in">
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>TIN</th><th>Status</th><th>Joined</th></tr></thead>
+          <tbody id="biz-tbody"><tr><td colspan="6" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+        </div>
+      </div>
+
+      <!-- Zones -->
+      <div id="page-zones" class="page fade-in">
+        <div class="flex justify-between items-center mb-4">
+          <p class="text-sm text-gray-500">Delivery zones define pricing regions across Kigali</p>
+          <button onclick="showZoneModal()" class="btn-primary btn-sm"><i class="fas fa-plus mr-1"></i>Add Zone</button>
+        </div>
+        <div class="grid lg:grid-cols-2 gap-4" id="zones-grid"></div>
+      </div>
+
+      <!-- Pricing -->
+      <div id="page-pricing" class="page fade-in">
+        <div class="grid lg:grid-cols-3 gap-4 mb-6">
+          <div class="card">
+            <h3 class="font-bold text-sm text-gray-900 mb-3">Platform Config</h3>
+            <div id="pricing-config" class="space-y-2"></div>
+          </div>
+          <div class="card lg:col-span-2">
+            <h3 class="font-bold text-sm text-gray-900 mb-3">Zone-to-Zone Pricing Matrix</h3>
+            <div class="overflow-x-auto" id="pricing-matrix"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Finances -->
+      <div id="page-finances" class="page fade-in">
+        <div class="grid lg:grid-cols-3 gap-4 mb-6">
+          <div class="kpi-card"><p class="text-xs text-gray-500">30-Day Gross</p><p class="text-2xl font-bold font-display mt-1" id="fin-gross">0</p></div>
+          <div class="kpi-card" style="border-left-color:#0A6847"><p class="text-xs text-gray-500">30-Day Revenue</p><p class="text-2xl font-bold font-display text-movo-500 mt-1" id="fin-revenue">0</p></div>
+          <div class="kpi-card" style="border-left-color:#F2B705"><p class="text-xs text-gray-500">Pending Payouts</p><p class="text-2xl font-bold font-display text-gold-500 mt-1" id="fin-payouts">0</p></div>
+        </div>
+        <div class="card">
+          <h3 class="font-bold text-sm text-gray-900 mb-3">Daily Breakdown (Last 30 Days)</h3>
+          <div class="overflow-x-auto">
+            <table><thead><tr><th>Date</th><th>Deliveries</th><th>Gross</th><th>Revenue</th><th>Payouts</th></tr></thead>
+            <tbody id="fin-tbody"></tbody></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tickets -->
+      <div id="page-tickets" class="page fade-in">
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>ID</th><th>Reporter</th><th>Category</th><th>Subject</th><th>Priority</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+          <tbody id="ticket-tbody"><tr><td colspan="8" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Zone Modal -->
+<div id="zone-modal" class="modal-overlay" style="display:none">
+  <div class="modal-content">
+    <h3 class="text-lg font-bold font-display text-gray-900 mb-4" id="zone-modal-title">Add Zone</h3>
+    <div class="space-y-3">
+      <input id="zone-name" class="input-field" placeholder="Zone name">
+      <div class="grid grid-cols-2 gap-3">
+        <input id="zone-lat" class="input-field" type="number" step="any" placeholder="Center latitude">
+        <input id="zone-lng" class="input-field" type="number" step="any" placeholder="Center longitude">
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <input id="zone-radius" class="input-field" type="number" placeholder="Radius (km)" value="3">
+        <input id="zone-parcel" class="input-field" type="number" placeholder="Parcel price">
+        <input id="zone-doc" class="input-field" type="number" placeholder="Document price">
+      </div>
+      <input id="zone-rate" class="input-field" type="number" placeholder="Per-km rate" value="200">
+    </div>
+    <div class="flex gap-2 mt-4">
+      <button onclick="saveZone()" class="btn-primary">Save</button>
+      <button onclick="document.getElementById('zone-modal').style.display='none'" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delivery Detail Modal -->
+<div id="del-modal" class="modal-overlay" style="display:none">
+  <div class="modal-content" style="max-width:600px">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-bold font-display text-gray-900" id="del-modal-title">Delivery</h3>
+      <button onclick="document.getElementById('del-modal').style.display='none'" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="del-modal-body"></div>
+  </div>
+</div>
+
+<!-- Ticket Modal -->
+<div id="ticket-modal" class="modal-overlay" style="display:none">
+  <div class="modal-content">
+    <h3 class="text-lg font-bold font-display text-gray-900 mb-4">Resolve Ticket</h3>
+    <textarea id="ticket-resolution" class="input-field" rows="4" placeholder="Resolution details..."></textarea>
+    <div class="flex gap-2 mt-3">
+      <button onclick="resolveTicket('resolved')" class="btn-primary">Resolve</button>
+      <button onclick="resolveTicket('closed')" class="btn-secondary">Close</button>
+      <button onclick="document.getElementById('ticket-modal').style.display='none'" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let token = localStorage.getItem('admin_token');
+function toast(message, error=false) { const el=document.getElementById('toast'); el.textContent=message; el.className='toast show'+(error?' error':''); setTimeout(()=>el.className='toast',3000); }
+async function api(path, options={}) { const headers={'Content-Type':'application/json', ...(options.headers||{})}; if(token) headers.Authorization='Bearer '+token; const response=await fetch(API+path,{...options,headers}); const body=await response.json().catch(()=>({success:false,error:'Invalid server response'})); if(!response.ok||!body.success) throw new Error(body.error||'Request failed'); return body.data; }
+async function handleLogin() { try { const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({phone:document.getElementById('login-phone').value.trim(),password:document.getElementById('login-password').value})}); if(!data.token||data.user?.role!=='admin') throw new Error('Administrator access is required'); token=data.token; localStorage.setItem('admin_token',token); document.getElementById('admin-name').textContent=data.user.full_name||'Admin'; enterApp(); } catch(error) { toast(error.message,true); } }
+function handleLogout() { token=null; localStorage.removeItem('admin_token'); document.getElementById('view-app').classList.remove('active'); const auth=document.getElementById('view-auth'); auth.classList.add('active'); auth.style.display='flex'; }
+function enterApp() { document.getElementById('view-auth').style.display='none'; document.getElementById('view-app').classList.add('active'); loadDashboard(); }
+function formatMoney(value) { return Number(value||0).toLocaleString()+' FRW'; }
+async function loadDashboard() { try { const data=await api('/api/admin/dashboard'); const values={'kpi-active':data.active,'kpi-today':data.todayCompleted,'kpi-riders':data.onlineRiders,'kpi-revenue':formatMoney(data.todayRevenue),'kpi-customers':data.totalCustomers,'kpi-total-riders':data.totalRiders,'kpi-pending':data.pendingApprovals,'kpi-tickets':data.openTickets,'kpi-month-del':data.monthDeliveries,'kpi-month-rev':formatMoney(data.monthRevenue),'kpi-businesses':data.totalBusinesses}; Object.entries(values).forEach(([id,value])=>{const el=document.getElementById(id);if(el)el.textContent=value??0;}); } catch(error) { toast(error.message,true); } }
+function showPage(name) { document.querySelectorAll('.page').forEach(page=>page.classList.remove('active')); document.getElementById('page-'+name)?.classList.add('active'); document.querySelectorAll('.nav-btn[data-page]').forEach(button=>button.classList.toggle('active',button.dataset.page===name)); const titles={dashboard:'Dashboard','live-map':'Live Operations Map',deliveries:'Delivery Management',riders:'Rider Management',customers:'Customer Management',businesses:'Business Accounts',zones:'Delivery Zones',pricing:'Pricing Configuration',finances:'Financial Overview',tickets:'Support Tickets'}; document.getElementById('page-title').textContent=titles[name]||name; if(name==='dashboard')loadDashboard(); }
+if(token) api('/api/auth/me').then(user=>{if(user.role!=='admin')throw new Error('Administrator access is required');document.getElementById('admin-name').textContent=user.full_name||'Admin';enterApp();}).catch(handleLogout);
+</script>
+</body>
+</html>
