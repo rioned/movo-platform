@@ -44,7 +44,15 @@
 - [ ] Add rider payout, emergency contact, insurance, and document metadata onboarding fields.
 - [ ] Run tests; commit `feat: secure phone onboarding and rider documents`.
 
-### Task 3: Quote, payment-intent, and immutable pricing contracts
+### Task 3: Maps, geocoding, routing, and location foundations
+**Files:** Create `src/providers/maps.js`, `src/services/location-service.js`, `src/routes/locations.js`, `public/shared/map.js`, `test/maps.test.js`.
+- [ ] Write failing tests for Kigali pilot-zone validation, address geocoding contract normalization, route-distance calculation fallback, location freshness, and unauthorized location access.
+- [ ] Define a provider interface: `geocode(address)`, `reverseGeocode(lat,lng)`, `route(origin,destination)`, and `validatePilotZone(point)`; implement a sandbox adapter plus an OpenStreetMap-compatible provider adapter configured only by environment variables.
+- [ ] Persist normalized pickup/destination coordinates, route distance, estimated duration, and rider location timestamps; reject points outside configured pilot zones.
+- [ ] Build an accessible map component for Customer/Business tracking, Rider pickup/destination navigation links, and Admin live operations. It must show a clear no-map/no-location state when providers are unavailable.
+- [ ] Run API, map-unit, and Playwright location tests; commit `feat: add Kigali maps routing and live location foundation`.
+
+### Task 4: Quote, payment-intent, and immutable pricing contracts
 **Files:** Create `src/domain/quotes.js`, `src/providers/payments.js`, `src/routes/quotes.js`, `src/routes/payments.js`; modify delivery schema and routes; create tests.
 - [ ] Write failing tests for quote expiry, pricing-rule version persistence, unauthorized quote use, and idempotent sandbox payment callbacks.
 - [ ] Implement immutable quote records and payment intents.
@@ -52,7 +60,7 @@
 - [ ] Add sandbox labels and receipts; reserve live settlement for verified provider callbacks.
 - [ ] Run tests; commit `feat: add immutable quotes and pilot payment intents`.
 
-### Task 4: Atomic Uber-style dispatch and delivery state machine
+### Task 5: Atomic Uber-style dispatch and delivery state machine
 **Files:** Create `src/domain/delivery-state.js`, `src/services/dispatch-service.js`, `src/routes/deliveries.js`; modify schema; create concurrency tests.
 - [ ] Write failing tests for every allowed/rejected transition, stale offer rejection, two-rider accept race, reassignment, and no-rider exhaustion.
 - [ ] Implement offers with expiry and conditional first-accept assignment in a SQLite transaction.
@@ -60,40 +68,40 @@
 - [ ] Add audited cancellation/reassignment/admin override rules.
 - [ ] Run tests; commit `feat: implement atomic rider offer dispatch lifecycle`.
 
-### Task 5: Tracking, pickup/delivery proof, receipt, rating, and support vertical slice
+### Task 6: Tracking, pickup/delivery proof, receipt, rating, and support vertical slice
 **Files:** Create `src/services/proof-service.js`, `src/routes/tracking.js`, `src/routes/support.js`, `src/routes/ratings.js`; modify schemas and Socket.IO handlers; create tests.
 - [ ] Write failing ownership/assignment tests for tracking, proof, ratings, and support.
 - [ ] Implement pickup OTP/checklist, delivery OTP, photo/signature proof metadata, receipt generation, ratings, and tickets.
 - [ ] Bind rider location events to assigned active deliveries and add connection retry/event ordering rules.
 - [ ] Run API and WebSocket tests; commit `feat: complete delivery proof and support lifecycle`.
 
-### Task 6: Customer portal MVP
+### Task 7: Customer portal MVP
 **Files:** Refactor `public/customer/`; create `public/shared/portal.css`, `public/shared/i18n.js`, `public/shared/api.js`, `test/e2e/customer.spec.js`.
 - [ ] Write Playwright tests for phone login, parcel/document quote, payment state, tracking, proof/receipt/history/rebook/rating/support.
 - [ ] Implement separate phone-first auth pages, quote review, request wizard, accessible tracking/status, history, and support views.
 - [ ] Add English/Kinyarwanda resource keys, keyboard focus, error states, and mobile layouts.
 - [ ] Run E2E; commit `feat: complete customer pilot journey`.
 
-### Task 7: Rider portal MVP and low-connectivity queue
+### Task 8: Rider portal MVP and low-connectivity queue
 **Files:** Refactor `public/rider/`; create `public/shared/offline-queue.js`, `test/e2e/rider.spec.js`.
 - [ ] Write Playwright tests for onboarding state, availability, offer timeout, accept, pickup proof, delivery proof, earnings, and incident reporting.
 - [ ] Implement offer UI, active-job lifecycle, proof capture, earnings/settlements, support/incidents, and location status.
 - [ ] Implement IndexedDB queue/retry/synchronization and connectivity indicator for rider lifecycle/location updates.
 - [ ] Run E2E; commit `feat: complete rider pilot workflow`.
 
-### Task 8: Business portal MVP and membership boundaries
+### Task 9: Business portal MVP and membership boundaries
 **Files:** Create `src/routes/business-members.js`, `src/services/statements.js`; refactor `public/business/`; create `test/e2e/business.spec.js`.
 - [ ] Write tests for owner/member authorization, business-scoped deliveries, statements, proof, and cross-organization denial.
 - [ ] Implement business membership roles, delivery history/tracking/proof, monthly statement, and basic member management.
 - [ ] Run API/E2E tests; commit `feat: complete business pilot operations`.
 
-### Task 9: Administration and operational audit MVP
+### Task 10: Administration and operational audit MVP
 **Files:** Create `src/routes/admin-operations.js`, `src/services/audit-service.js`; refactor `public/admin/`; create tests.
 - [ ] Write tests for rider approval, pricing version changes, payment exception actions, audit event completeness, and authorization.
 - [ ] Implement rider review, delivery monitoring/reassignment, zone/pricing management, support/payment exception views, and operational reports.
 - [ ] Run admin E2E; commit `feat: complete pilot operations administration`.
 
-### Task 10: Pilot deployment and acceptance evidence
+### Task 11: Pilot deployment and acceptance evidence
 **Files:** Create `Dockerfile`, `docker-compose.yml`, `deploy/nginx.conf`, `.github/workflows/ci.yml`, `scripts/backup.sh`, `scripts/restore-verify.sh`, `docs/PILOT-RUNBOOK.md`.
 - [ ] Write checks for production configuration, readiness, backup/restore, secret absence, and CI commands.
 - [ ] Implement HTTPS proxy configuration, health/readiness/version endpoints, structured logs, backup/restore, CI, and rollback runbook.
