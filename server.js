@@ -46,7 +46,6 @@ const io = new Server(server, { cors: corsOptions });
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(UPLOAD_DIR));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/customer', express.static(path.join(__dirname, 'public', 'customer')));
 app.use('/rider', express.static(path.join(__dirname, 'public', 'rider')));
@@ -641,6 +640,18 @@ app.post('/api/rider/documents', auth, roleAuth('rider'), upload.fields([
     db.prepare(`UPDATE riders SET ${updates.join(',')} WHERE user_id=?`).run(...vals);
     resOK(res, { message: 'Documents uploaded' });
   } catch(e) { resErr(res, e.message); }
+});
+
+app.get('/api/rider/documents/:riderId/:kind', auth, (req, res) => {
+  const fields = { id_front: 'id_front_photo', id_back: 'id_back_photo', license: 'license_photo', motorcycle: 'motorcycle_photo' };
+  const field = fields[req.params.kind];
+  if (!field) return resErr(res, 'Unknown document type', 404);
+  if (req.user.role !== 'admin' && req.user.id !== req.params.riderId) return resErr(res, 'Document access denied', 403);
+  const rider = db.prepare(`SELECT ${field} AS filename FROM riders WHERE user_id=?`).get(req.params.riderId);
+  if (!rider?.filename) return resErr(res, 'Document not found', 404);
+  const filePath = path.join(UPLOAD_DIR, path.basename(rider.filename));
+  if (!fs.existsSync(filePath)) return resErr(res, 'Document not found', 404);
+  res.sendFile(filePath);
 });
 
 app.put('/api/rider/status', auth, roleAuth('rider'), (req, res) => {
