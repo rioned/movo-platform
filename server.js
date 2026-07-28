@@ -494,15 +494,18 @@ app.post('/api/auth/register', (req, res) => {
     if (db.prepare('SELECT id FROM users WHERE phone=?').get(phone)) return resErr(res, 'Phone number already registered');
     const hash = password ? bcrypt.hashSync(password, 10) : null;
     const otp = genOTP();
+    const otpHash = bcrypt.hashSync(otp, 10);
     const id = uuidv4();
     const create = db.transaction(() => {
       db.prepare("INSERT INTO users (id,phone,email,password,full_name,role,otp_code,otp_expires) VALUES (?,?,?,?,?,?,?,datetime('now','+10 minutes'))")
-        .run(id, phone, email || null, hash, full_name.trim(), role, otp);
+        .run(id, phone, email || null, hash, full_name.trim(), role, otpHash);
       if (role === 'rider') db.prepare('INSERT INTO riders (user_id,national_id,license_number,motorcycle_plate) VALUES (?,?,?,?)').run(id, national_id.trim(), license_number.trim(), motorcycle_plate.trim().toUpperCase());
       if (role === 'business') db.prepare('INSERT INTO businesses (user_id,company_name,tax_id) VALUES (?,?,?)').run(id, company_name.trim(), tax_id?.trim() || null);
     });
     create();
-    resOK(res, { id, phone, otp, message: 'OTP sent to your phone (shown here for demo)' });
+    const response = { id, phone, message: runtime.otpTestMode ? 'OTP generated for test mode' : 'OTP sent to your phone' };
+    if (runtime.otpTestMode) response.otp = otp;
+    resOK(res, response);
   } catch(e) { resErr(res, e.message); }
 });
 
@@ -513,8 +516,8 @@ app.post('/api/auth/verify-otp', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE phone=?').get(phone);
     if (!user) return resErr(res, 'User not found');
     if (!/^[0-9]{6}$/.test(otp)) return resErr(res, 'OTP must be six digits');
-    if (process.env.OTP_TEST_MODE !== 'true' && user.otp_code !== otp) return resErr(res, 'Invalid OTP');
-    if (process.env.OTP_TEST_MODE !== 'true' && new Date(user.otp_expires) < new Date()) return resErr(res, 'OTP expired');
+    if (!runtime.otpTestMode && !bcrypt.compareSync(otp, user.otp_code || '')) return resErr(res, 'Invalid OTP');
+    if (!runtime.otpTestMode && new Date(user.otp_expires) < new Date()) return resErr(res, 'OTP expired');
     db.prepare('UPDATE users SET otp_code=NULL,otp_expires=NULL,status=\'active\' WHERE id=?').run(user.id);
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
     const profile = { id: user.id, phone: user.phone, full_name: user.full_name, role: user.role, email: user.email };
@@ -533,10 +536,12 @@ app.post('/api/auth/login', (req, res) => {
     if (password && user.password) {
       if (!bcrypt.compareSync(password, user.password)) return resErr(res, 'Invalid password');
     } else {
-      // OTP-based login: generate and return OTP
       const otp = genOTP();
-      db.prepare('UPDATE users SET otp_code=?,otp_expires=datetime(\'now\',\'+10 minutes\') WHERE id=?').run(otp, user.id);
-      return resOK(res, { requires_otp: true, phone, otp, message: 'OTP sent (shown here for demo)' });
+      const otpHash = bcrypt.hashSync(otp, 10);
+      db.prepare('UPDATE users SET otp_code=?,otp_expires=datetime(\'now\',\'+10 minutes\') WHERE id=?').run(otpHash, user.id);
+      const response = { requires_otp: true, phone, message: runtime.otpTestMode ? 'OTP generated for test mode' : 'OTP sent to your phone' };
+      if (runtime.otpTestMode) response.otp = otp;
+      return resOK(res, response);
     }
     if (user.status !== 'active') return resErr(res, 'Account is ' + user.status);
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
