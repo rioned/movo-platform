@@ -1,12 +1,44 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
-const path = require('node:path');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const db = new Database(path.join(root, 'movo.db'));
-const base = 'http://127.0.0.1:3000';
+const port = 32000 + Math.floor(Math.random() * 1000);
+const base = `http://127.0.0.1:${port}`;
+const dbPath = path.join(os.tmpdir(), `movo-registration-${process.pid}-${Date.now()}.db`);
+let db;
+let server;
 const phoneFor = role => `+25079${Date.now().toString().slice(-7)}${{ customer: '1', rider: '2', business: '3' }[role]}`;
+
+test.before(async () => {
+  server = spawn(process.execPath, ['server.js'], {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DB_PATH: dbPath, JWT_SECRET: 'registration-test-secret', OTP_TEST_MODE: 'true' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out waiting for registration test server')), 10000);
+    server.stdout.on('data', chunk => {
+      if (chunk.toString().includes('Server running')) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+    server.once('error', reject);
+    server.once('exit', code => reject(new Error(`Registration test server exited early with ${code}`)));
+  });
+  db = new Database(dbPath);
+});
+
+test.after(() => {
+  db?.close();
+  server?.kill();
+  for (const file of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) fs.rmSync(file, { force: true });
+});
 
 async function registerAndVerify(role, extra = {}) {
   const phone = phoneFor(role);

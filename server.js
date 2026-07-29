@@ -375,6 +375,40 @@ function seedData() {
     const insCfg = db.prepare('INSERT OR REPLACE INTO pricing_config (key,value) VALUES (?,?)');
     configs.forEach(c => insCfg.run(c[0], String(c[1])));
   }
+  if (process.env.LIVE_MAP_DEMO_MODE === 'true') seedLiveMapDemoData();
+}
+
+function seedLiveMapDemoData() {
+  const customerId = 'demo-map-customer';
+  db.prepare('INSERT OR IGNORE INTO users (id,phone,email,full_name,role,status) VALUES (?,?,?,?,?,?)')
+    .run(customerId, '+250730000000', 'demo-map@movo.rw', 'Demo Map Customer', 'customer', 'active');
+
+  const riders = [
+    ['demo-map-rider-1', '+250730000001', 'Demo Rider — Kacyiru', 'RAB 001D', -1.9448, 30.0612],
+    ['demo-map-rider-2', '+250730000002', 'Demo Rider — Remera', 'RAB 002D', -1.9488, 30.0825],
+    ['demo-map-rider-3', '+250730000003', 'Demo Rider — Downtown', 'RAB 003D', -1.9572, 30.0571]
+  ];
+  const insertUser = db.prepare('INSERT OR IGNORE INTO users (id,phone,email,full_name,role,status) VALUES (?,?,?,?,?,?)');
+  const insertRider = db.prepare("INSERT OR IGNORE INTO riders (user_id,motorcycle_plate,approval_status,online_status,current_lat,current_lng,last_location_update) VALUES (?,?, 'approved','online',?,?,datetime('now'))");
+  const updateRider = db.prepare("UPDATE riders SET approval_status='approved',online_status='online',current_lat=?,current_lng=?,last_location_update=datetime('now') WHERE user_id=?");
+  riders.forEach(([id, phone, name, plate, lat, lng]) => {
+    insertUser.run(id, phone, `${id}@movo.rw`, name, 'rider', 'active');
+    insertRider.run(id, plate, lat, lng);
+    updateRider.run(lat, lng, id);
+  });
+
+  const deliveries = [
+    ['demo-map-delivery-1', 'DEMO-MAP-001', 'demo-map-rider-1', 'going_pickup', 'Kacyiru Convention Centre', -1.9441, 30.0619, 'Kigali Heights', -1.9367, 30.0867],
+    ['demo-map-delivery-2', 'DEMO-MAP-002', 'demo-map-rider-2', 'in_transit', 'Remera Bus Park', -1.9494, 30.0910, 'Kigali International Airport', -1.9680, 30.1395],
+    ['demo-map-delivery-3', 'DEMO-MAP-003', 'demo-map-rider-3', 'arrived_dest', 'Nyamirambo Stadium', -1.9755, 30.0446, 'Kigali City Tower', -1.9494, 30.0588]
+  ];
+  const insertDelivery = db.prepare(`INSERT OR IGNORE INTO deliveries (id,order_no,customer_id,rider_id,service_type,status,pickup_address,pickup_lat,pickup_lng,pickup_name,pickup_phone,dest_address,dest_lat,dest_lng,dest_name,dest_phone,customer_price,rider_earnings,platform_fee,total_charge,payment_method,assigned_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`);
+  const updateDelivery = db.prepare("UPDATE deliveries SET rider_id=?,status=?,updated_at=datetime('now') WHERE id=?");
+  deliveries.forEach(([id, orderNo, riderId, status, pickupAddress, pickupLat, pickupLng, destAddress, destLat, destLng]) => {
+    insertDelivery.run(id, orderNo, customerId, riderId, 'parcel', status, pickupAddress, pickupLat, pickupLng, 'Demo Sender', '+250730000010', destAddress, destLat, destLng, 'Demo Recipient', '+250730000011', 1500, 1200, 300, 1500, 'mobile_money');
+    updateDelivery.run(riderId, status, id);
+  });
 }
 
 // ─── Utility Functions ───────────────────────────────────────
@@ -438,7 +472,13 @@ function addEvent(deliveryId, status, lat, lng, note) {
 function updateDeliveryStatus(id, status, extra={}) {
   const sets = ['status=?','updated_at=datetime(\'now\')'];
   const vals = [status];
+  const deliveryFields = new Set([
+    'rider_id', 'assigned_at', 'pickup_verified_at', 'pickup_photo', 'picked_up_at',
+    'delivery_verified_at', 'delivery_photo', 'recipient_name', 'delivery_notes',
+    'delivered_at', 'payment_status', 'paid_at', 'cancelled_at', 'cancel_reason', 'cancelled_by'
+  ]);
   for (const [k,v] of Object.entries(extra)) {
+    if (!deliveryFields.has(k)) continue;
     sets.push(`${k}=?`);
     vals.push(v);
   }
@@ -1062,7 +1102,7 @@ app.get('/api/admin/users', auth, roleAuth('admin'), (req, res) => {
   const { role, status, search, page=1, limit=20 } = req.query;
   let query = 'SELECT u.id,u.phone,u.email,u.full_name,u.role,u.status,u.created_at';
   if (role === 'rider') query += ',r.approval_status,r.online_status,r.avg_rating,r.total_deliveries,r.total_earnings';
-  if (role === 'business') query += ',b.company_name,b.approval_status as biz_status';
+  if (role === 'business') query += ',b.company_name,b.tax_id,b.approval_status as biz_status';
   query += ' FROM users u';
   if (role === 'rider') query += ' LEFT JOIN riders r ON u.id=r.user_id';
   if (role === 'business') query += ' LEFT JOIN businesses b ON u.id=b.user_id';
@@ -1183,10 +1223,14 @@ app.get('/api/admin/finances', auth, roleAuth('admin'), (req, res) => {
 });
 
 app.get('/api/admin/live-map', auth, roleAuth('admin'), (req, res) => {
-  const riders = db.prepare("SELECT u.id,u.full_name,r.motorcycle_plate,r.avg_rating,r.current_lat as lat,r.current_lng as lng,r.online_status FROM users u JOIN riders r ON u.id=r.user_id WHERE r.online_status IN ('online','busy')").all();
-  const activeDeliveries = db.prepare(`SELECT d.*,u.full_name as rider_name FROM deliveries d
-    JOIN users u ON d.rider_id=u.id WHERE d.status NOT IN ('delivered','cancelled','failed','created','searching')`).all();
-  resOK(res, { riders, activeDeliveries });
+  const riders = db.prepare("SELECT u.id,u.full_name,r.motorcycle_plate,r.avg_rating,r.current_lat as lat,r.current_lng as lng,r.online_status,r.last_location_update FROM users u JOIN riders r ON u.id=r.user_id WHERE r.online_status IN ('online','busy')").all();
+  const activeDeliveries = db.prepare(`SELECT d.*,u.full_name as rider_name,r.current_lat as rider_lat,r.current_lng as rider_lng,r.last_location_update
+    FROM deliveries d JOIN users u ON d.rider_id=u.id JOIN riders r ON d.rider_id=r.user_id
+    WHERE d.status NOT IN ('delivered','cancelled','failed','created','searching')`).all();
+  resOK(res, {
+    riders: riders.map(rider => ({ ...rider, is_demo: rider.id.startsWith('demo-map-') })),
+    activeDeliveries: activeDeliveries.map(delivery => ({ ...delivery, is_demo: delivery.id.startsWith('demo-map-') }))
+  });
 });
 
 app.get('/api/admin/reports', auth, roleAuth('admin'), (req, res) => {
@@ -1197,9 +1241,9 @@ app.get('/api/admin/reports', auth, roleAuth('admin'), (req, res) => {
   } else if (type === 'service-type') {
     data = db.prepare('SELECT service_type, COUNT(*) as count FROM deliveries GROUP BY service_type').all();
   } else if (type === 'top-zones') {
-    data = db.prepare('SELECT dest_zone as zone, COUNT(*) as count FROM deliveries WHERE status="delivered" GROUP BY dest_zone ORDER BY count DESC LIMIT 10').all();
+    data = db.prepare("SELECT dest_zone as zone, COUNT(*) as count FROM deliveries WHERE status='delivered' GROUP BY dest_zone ORDER BY count DESC LIMIT 10").all();
   } else if (type === 'rider-performance') {
-    data = db.prepare('SELECT u.full_name, r.total_deliveries, r.avg_rating, r.total_earnings FROM users u JOIN riders r ON u.id=r.user_id WHERE r.approval_status="approved" ORDER BY r.total_deliveries DESC LIMIT 20').all();
+    data = db.prepare("SELECT u.full_name, r.total_deliveries, r.avg_rating, r.total_earnings FROM users u JOIN riders r ON u.id=r.user_id WHERE r.approval_status='approved' ORDER BY r.total_deliveries DESC LIMIT 20").all();
   } else {
     data = db.prepare('SELECT date(created_at) as day, COUNT(*) as count FROM deliveries GROUP BY date(created_at) ORDER BY day DESC LIMIT 30').all();
   }

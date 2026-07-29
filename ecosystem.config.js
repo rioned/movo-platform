@@ -10,7 +10,8 @@ module.exports = {
     env: {
       NODE_ENV: 'production',
       PORT: 3000,
-      OTP_TEST_MODE: 'false'
+      OTP_TEST_MODE: 'false',
+      LIVE_MAP_DEMO_MODE: 'true'
     }
   }]
 };

@@ -26,3 +26,22 @@ test('admin page inline scripts parse so the Sign In handler is available', () =
   assert.doesNotThrow(() => new Function(inlineScripts));
   assert.match(inlineScripts, /function handleLogin\s*\(/);
 });
+
+test('live map uses real OSM tiles, routes, and timed rider-location refreshes', () => {
+  assert.match(html, /https:\/\/\{s\}\.tile\.openstreetmap\.org\/\{z\}\/\{x\}\/\{y\}\.png/);
+  assert.match(html, /https:\/\/router\.project-osrm\.org\/route\/v1\/driving/);
+  assert.match(html, /setInterval\(loadLiveMap,15000\)/);
+  assert.match(html, /function addMapRoute\s*\(/);
+  assert.match(html, /function focusMapPoint\s*\(/);
+  assert.match(html, /\.map-container\.leaflet-container\{height:400px\}/);
+  assert.match(html, /className:'moto-map-icon'/);
+  assert.match(html, /fa-motorcycle/);
+});
+
+test('admin portal has a persistent dark-mode switch that also themes the map', () => {
+  assert.match(html, /id="theme-toggle"/);
+  assert.match(html, /function toggleTheme\s*\(/);
+  assert.match(html, /localStorage\.setItem\('admin_theme'/);
+  assert.match(html, /body\.dark/);
+  assert.match(html, /basemaps\.cartocdn\.com\/dark_all/);
+});
