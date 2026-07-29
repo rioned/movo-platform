@@ -234,6 +234,16 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS delivery_offers (
+    id TEXT PRIMARY KEY,
+    delivery_id TEXT NOT NULL REFERENCES deliveries(id),
+    rider_id TEXT NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'offered' CHECK(status IN ('offered','accepted','declined','expired')),
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    responded_at TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     delivery_id TEXT REFERENCES deliveries(id),
@@ -319,6 +329,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
   CREATE INDEX IF NOT EXISTS idx_deliveries_business ON deliveries(business_id);
   CREATE INDEX IF NOT EXISTS idx_rider_locations_rider ON rider_locations(rider_id);
+  CREATE INDEX IF NOT EXISTS idx_delivery_offers_rider ON delivery_offers(rider_id,status,expires_at);
   CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_reporter ON tickets(reporter_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
@@ -650,7 +661,7 @@ app.delete('/api/addresses/:id', auth, (req, res) => {
 // ─── RIDER ROUTES ────────────────────────────────────────────
 app.put('/api/rider/profile', auth, roleAuth('rider'), (req, res) => {
   try {
-    const fields = ['national_id','license_number','motorcycle_plate','motorcycle_make','motorcycle_color',
+    const fields = ['national_id','license_number','motorcycle_plate','motorcycle_make','motorcycle_type','motorcycle_color',
       'insurance_number','insurance_expiry','emergency_name','emergency_phone'];
     const updates = []; const vals = [];
     for (const f of fields) {
@@ -664,12 +675,16 @@ app.put('/api/rider/profile', auth, roleAuth('rider'), (req, res) => {
   } catch(e) { resErr(res, e.message); }
 });
 
+try { db.exec("ALTER TABLE riders ADD COLUMN profile_photo TEXT"); } catch (_) {}
+try { db.exec("ALTER TABLE riders ADD COLUMN motorcycle_type TEXT"); } catch (_) {}
 app.post('/api/rider/documents', auth, roleAuth('rider'), upload.fields([
+  { name: 'profile', maxCount: 1 },
   { name: 'id_front', maxCount: 1 }, { name: 'id_back', maxCount: 1 },
   { name: 'license', maxCount: 1 }, { name: 'motorcycle', maxCount: 1 }
 ]), (req, res) => {
   try {
     const updates = []; const vals = [];
+    if (req.files['profile']) { updates.push('profile_photo=?'); vals.push(req.files['profile'][0].filename); }
     if (req.files['id_front']) { updates.push('id_front_photo=?'); vals.push(req.files['id_front'][0].filename); }
     if (req.files['id_back']) { updates.push('id_back_photo=?'); vals.push(req.files['id_back'][0].filename); }
     if (req.files['license']) { updates.push('license_photo=?'); vals.push(req.files['license'][0].filename); }
@@ -683,7 +698,7 @@ app.post('/api/rider/documents', auth, roleAuth('rider'), upload.fields([
 });
 
 app.get('/api/rider/documents/:riderId/:kind', auth, (req, res) => {
-  const fields = { id_front: 'id_front_photo', id_back: 'id_back_photo', license: 'license_photo', motorcycle: 'motorcycle_photo' };
+  const fields = { profile: 'profile_photo', id_front: 'id_front_photo', id_back: 'id_back_photo', license: 'license_photo', motorcycle: 'motorcycle_photo' };
   const field = fields[req.params.kind];
   if (!field) return resErr(res, 'Unknown document type', 404);
   if (req.user.role !== 'admin' && req.user.id !== req.params.riderId) return resErr(res, 'Document access denied', 403);
@@ -705,11 +720,28 @@ app.put('/api/rider/status', auth, roleAuth('rider'), (req, res) => {
 
 app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   const { lat, lng } = req.body;
-  if (!lat || !lng) return resErr(res, 'Lat and Lng required');
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng)) || Math.abs(Number(lat)) > 90 || Math.abs(Number(lng)) > 180) return resErr(res, 'Valid latitude and longitude required');
+  const rider = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(req.user.id);
+  if (!rider || rider.approval_status !== 'approved' || !['online','busy'].includes(rider.online_status)) return resErr(res, 'Approved online rider required', 403);
   db.prepare('UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime(\'now\') WHERE user_id=?')
     .run(lat, lng, req.user.id);
   db.prepare('INSERT INTO rider_locations (id,rider_id,lat,lng) VALUES (?,?,?,?)').run(uuidv4(), req.user.id, lat, lng);
   resOK(res, { message: 'Location updated' });
+});
+
+app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
+  db.prepare("UPDATE delivery_offers SET status='expired',responded_at=datetime('now') WHERE rider_id=? AND status='offered' AND expires_at<=datetime('now')").run(req.user.id);
+  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
+  const activeDelivery = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
+  const offers = db.prepare(`SELECT o.id as offer_id,o.expires_at,d.id,d.order_no,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,d.pickup_name,d.pickup_phone,d.dest_address,d.dest_lat,d.dest_lng,d.dest_name,d.dest_phone,d.rider_earnings,d.distance_km
+    FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id WHERE o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
+  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, offers, serverTime: new Date().toISOString() });
+});
+
+app.put('/api/mobile/v1/rider/offers/:offerId/decline', auth, roleAuth('rider'), (req, res) => {
+  const changed = db.prepare("UPDATE delivery_offers SET status='declined',responded_at=datetime('now') WHERE id=? AND rider_id=? AND status='offered' AND expires_at>datetime('now')").run(req.params.offerId, req.user.id);
+  if (!changed.changes) return resErr(res, 'Offer is unavailable', 409);
+  resOK(res, { message: 'Offer declined' });
 });
 
 app.get('/api/rider/earnings', auth, roleAuth('rider'), (req, res) => {
@@ -747,6 +779,17 @@ app.get('/api/rider/active-delivery', auth, roleAuth('rider'), (req, res) => {
   const d = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY created_at DESC LIMIT 1")
     .get(req.user.id);
   resOK(res, d || null);
+});
+
+app.post('/api/rider/deliveries/:id/proof', auth, roleAuth('rider'), upload.single('proof'), (req, res) => {
+  const d = db.prepare("SELECT status FROM deliveries WHERE id=? AND rider_id=?").get(req.params.id, req.user.id);
+  if (!d || !['arrived_pickup','arrived_dest'].includes(d.status)) return resErr(res, 'Proof is not accepted at this delivery stage', 409);
+  if (!req.file) return resErr(res, 'A JPEG, PNG, or WebP proof image is required');
+  const kind = req.body.kind === 'delivery' ? 'delivery' : 'pickup';
+  const field = kind === 'delivery' ? 'delivery_photo' : 'pickup_photo';
+  db.prepare(`UPDATE deliveries SET ${field}=?,updated_at=datetime('now') WHERE id=?`).run(req.file.filename, req.params.id);
+  audit(req.user.id, 'rider_proof_uploaded', 'delivery', req.params.id, JSON.stringify({ kind }));
+  resOK(res, { kind, filename: req.file.filename });
 });
 
 // ─── BUSINESS ROUTES ─────────────────────────────────────────
@@ -914,7 +957,16 @@ app.put('/api/deliveries/:id/accept', auth, roleAuth('rider'), (req, res) => {
   // Check if rider already has active delivery
   const active = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status NOT IN ('delivered','cancelled','failed')").get(req.user.id);
   if (active) return resErr(res, 'You have an active delivery');
-  updateDeliveryStatus(d.id, 'assigned', { rider_id: req.user.id, assigned_at: new Date().toISOString() });
+  const acceptOffer = db.transaction(() => {
+    const offer = db.prepare("SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=? AND status='offered' AND expires_at>datetime('now')").get(d.id, req.user.id);
+    if (!offer) return false;
+    const claimed = db.prepare("UPDATE deliveries SET rider_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status='searching'").run(req.user.id, d.id);
+    if (!claimed.changes) return false;
+    db.prepare("UPDATE delivery_offers SET status=CASE WHEN id=? THEN 'accepted' ELSE 'expired' END,responded_at=datetime('now') WHERE delivery_id=? AND status='offered'").run(offer.id, d.id);
+    addEvent(d.id, 'assigned', null, null, 'Rider accepted delivery offer');
+    return true;
+  });
+  if (!acceptOffer()) return resErr(res, 'Offer is unavailable or already accepted', 409);
   db.prepare("UPDATE riders SET online_status='busy' WHERE user_id=?").run(req.user.id);
   notifyUser(d.customer_id, 'rider_assigned', 'Rider Assigned', `A rider has been assigned to your delivery ${d.order_no}`, { delivery_id: d.id });
   // Emit to customer socket
@@ -986,7 +1038,7 @@ app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), (req, res) => {
     .run(uuidv4(), d.id, req.user.id, d.rider_earnings, 'rider_payout', 'mobile_money', 'completed', now);
   db.prepare('INSERT INTO payments (id,delivery_id,user_id,amount,type,method,status,processed_at) VALUES (?,?,?,?,?,?,?,?)')
     .run(uuidv4(), d.id, d.customer_id, d.total_charge, 'customer_pay', d.payment_method, 'completed', now);
-  db.prepare('INSERT INTO payments (id,delivery_id,user_id,amount,type,status,processed_at) VALUES (?,?,?,?,?,?)')
+  db.prepare('INSERT INTO payments (id,delivery_id,user_id,amount,type,status,processed_at) VALUES (?,?,?,?,?,?,?)')
     .run(uuidv4(), d.id, d.customer_id, d.platform_fee, 'platform_fee', 'completed', now);
   notifyUser(d.customer_id, 'delivered', 'Delivery Completed', `Your ${d.service_type} has been delivered! Order: ${d.order_no}`, { delivery_id: d.id });
   resOK(res, { message: 'Delivery completed' });
@@ -1277,15 +1329,21 @@ function dispatchDelivery(deliveryId) {
 
     if (nearby.length > 0) {
       for (const rider of nearby.slice(0, 5)) {
+        const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'));
+        const existingOffer = db.prepare("SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=? AND status='offered' AND expires_at>datetime('now')").get(d.id, rider.id);
+        const offerId = existingOffer?.id || uuidv4();
+        if (!existingOffer) db.prepare("INSERT INTO delivery_offers (id,delivery_id,rider_id,expires_at) VALUES (?,?,?,datetime('now',?))")
+          .run(offerId, d.id, rider.id, `+${timeoutSeconds} seconds`);
         const sock = userSockets[rider.id];
         if (sock) {
           sock.emit('new_delivery', {
+            offer_id: offerId,
             id: d.id, order_no: d.order_no, service_type: d.service_type,
             pickup_address: d.pickup_address, pickup_lat: d.pickup_lat, pickup_lng: d.pickup_lng,
             dest_address: d.dest_address, dest_lat: d.dest_lat, dest_lng: d.dest_lng,
             earnings: d.rider_earnings, distance_km: d.distance_km,
             estimated_minutes: d.est_delivery_time,
-            timeout: parseInt(getConfig('rider_accept_timeout_sec', '30'))
+            timeout: timeoutSeconds
           });
         }
       }

@@ -95,7 +95,13 @@ test('admin portal APIs support every rendered management view and mutation', as
     }
   });
   const deliveryId = deliveryResult.delivery.id;
+  const riderHome = await request('/api/mobile/v1/rider/home', { token: rider.token });
+  assert.equal(riderHome.approval_status, 'approved');
+  assert.equal(riderHome.online_status, 'online');
+  assert.equal(riderHome.offers.some(offer => offer.id === deliveryId && offer.offer_id), true);
   await request(`/api/deliveries/${deliveryId}/accept`, { token: rider.token, method: 'PUT', body: {} });
+  const riderHomeAfterAccept = await request('/api/mobile/v1/rider/home', { token: rider.token });
+  assert.equal(riderHomeAfterAccept.activeDelivery.id, deliveryId);
   const deliveries = await request('/api/admin/deliveries?search=Kacyiru', { token: adminToken });
   assert.equal(deliveries.some(delivery => delivery.id === deliveryId), true);
   const liveMap = await request('/api/admin/live-map', { token: adminToken });
