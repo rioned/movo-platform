@@ -6,6 +6,7 @@ import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -207,6 +208,8 @@ class MainActivity : ComponentActivity() {
     var motorcycleColor by remember { mutableStateOf("") }
     var settingsSaved by remember { mutableStateOf(false) }
 
+    BackHandler(enabled = profileExpanded) { profileExpanded = false }
+
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
       val kind = documentKind
       if (uri != null && kind != null) scope.launch { try { api.uploadDocument(kind, uri); message = "${kind.replace('_', ' ')} uploaded for approval." } catch (e: Exception) { message = e.message ?: "Upload failed" } }
@@ -309,7 +312,7 @@ class MainActivity : ComponentActivity() {
             tonalElevation = 2.dp,
           ) {
             Row(
-              Modifier.fillMaxWidth().clickable { profileExpanded = !profileExpanded }.padding(12.dp),
+              Modifier.fillMaxWidth().clickable(enabled = !profileExpanded) { profileExpanded = true }.padding(12.dp),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -466,7 +469,13 @@ class MainActivity : ComponentActivity() {
               ) {
                 Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState())) {
                   Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MovoColor.Divider).align(Alignment.CenterHorizontally))
-                  Spacer(Modifier.height(16.dp))
+                  TextButton(
+                    onClick = { profileExpanded = false },
+                    contentPadding = PaddingValues(horizontal = 0.dp),
+                  ) {
+                    Text("←  Back to main screen", color = MovoColor.Green, fontWeight = FontWeight.SemiBold)
+                  }
+                  Spacer(Modifier.height(4.dp))
 
                   // Avatar
                   Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
