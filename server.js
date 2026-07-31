@@ -643,6 +643,43 @@ const SERVICE_MODES = {
 const SERVICE_MODE_VALUES = Object.keys(SERVICE_MODES);
 const SERVICE_TYPE_VALUES = SERVICE_MODE_VALUES.flatMap(mode => SERVICE_MODES[mode].serviceTypes);
 
+/**
+ * Customer-facing nouns per mode. Collected here rather than inlined at each
+ * notification so a passenger is never told their "item" was collected, and so
+ * adding a third product means adding a row, not auditing every message.
+ */
+const MODE_COPY = {
+  ride: {
+    job: 'ride', Job: 'Ride',
+    assignedTitle: 'Rider on the way', assignedBody: order => `A MOVO rider is coming to pick you up for trip ${order}`,
+    enRouteTitle: 'Rider heading to you', enRouteBody: order => `Your rider is on the way to your pickup point for ${order}`,
+    atPickupTitle: 'Your rider has arrived', atPickupBody: order => `Your MOVO rider is waiting at your pickup point for ${order}`,
+    boardedTitle: 'Trip started', boardedBody: order => `You are on board. Enjoy your trip — ${order}`,
+    movingTitle: 'On the way', movingBody: order => `Your trip ${order} is under way`,
+    atDestTitle: 'You have arrived', atDestBody: order => `You have reached your destination for trip ${order}`,
+    completedTitle: 'Trip completed', completedBody: order => `Your MOVO trip ${order} is complete. Thanks for riding with us!`,
+    cancelledTitle: 'Trip cancelled',
+    noRiderTitle: 'No rider available', noRiderBody: order => `We could not find a rider for your trip ${order}. Please try again.`
+  },
+  delivery: {
+    job: 'delivery', Job: 'Delivery',
+    assignedTitle: 'Rider Assigned', assignedBody: order => `A rider has been assigned to your delivery ${order}`,
+    enRouteTitle: 'Rider En Route', enRouteBody: order => `Your rider is heading to pickup for ${order}`,
+    atPickupTitle: 'Rider at Pickup', atPickupBody: order => `Your rider has arrived at the pickup location for ${order}`,
+    boardedTitle: 'Item Collected', boardedBody: order => `Your item has been picked up for ${order}`,
+    movingTitle: 'Delivery in Transit', movingBody: order => `Your item is on its way for ${order}`,
+    atDestTitle: 'Rider at Destination', atDestBody: order => `Your rider has arrived at the destination for ${order}`,
+    completedTitle: 'Delivery Completed', completedBody: order => `Your item has been delivered! Order: ${order}`,
+    cancelledTitle: 'Delivery Cancelled',
+    noRiderTitle: 'No Rider Available', noRiderBody: order => `We could not find a rider for ${order}. Please try again.`
+  }
+};
+
+/** The copy set for a delivery row; unknown or legacy rows read as deliveries. */
+function modeCopy(delivery) {
+  return MODE_COPY[delivery?.service_mode] || MODE_COPY.delivery;
+}
+
 /** The mode a service type belongs to — the inverse index of SERVICE_MODES. */
 function serviceModeOf(serviceType) {
   return SERVICE_MODE_VALUES.find(mode => SERVICE_MODES[mode].serviceTypes.includes(serviceType)) || null;
@@ -1299,9 +1336,16 @@ app.get('/api/rider/earnings', auth, roleAuth('rider'), (req, res) => {
   const stats = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(rider_earnings),0) as total_earnings,
     COALESCE(SUM(platform_fee),0) as total_fees FROM deliveries d WHERE d.rider_id=? AND d.status='delivered' ${dateFilter}`)
     .get(req.user.id);
-  const recent = db.prepare(`SELECT d.id,d.order_no,d.service_type,d.rider_earnings,d.delivered_at,d.pickup_address,d.dest_address
+  const recent = db.prepare(`SELECT d.id,d.order_no,d.service_mode,d.service_type,d.rider_earnings,d.delivered_at,d.pickup_address,d.dest_address
     FROM deliveries d WHERE d.rider_id=? AND d.status='delivered' ${dateFilter} ORDER BY d.delivered_at DESC LIMIT 20`).all(req.user.id);
-  resOK(res, { ...stats, recent });
+  // A rider working both products needs to see which one actually pays them.
+  const byModeRows = db.prepare(`SELECT d.service_mode, COUNT(*) as count, COALESCE(SUM(d.rider_earnings),0) as total_earnings
+    FROM deliveries d WHERE d.rider_id=? AND d.status='delivered' ${dateFilter} GROUP BY d.service_mode`).all(req.user.id);
+  const byMode = Object.fromEntries(SERVICE_MODE_VALUES.map(mode => {
+    const row = byModeRows.find(entry => entry.service_mode === mode);
+    return [mode, { count: row?.count || 0, total_earnings: row?.total_earnings || 0 }];
+  }));
+  resOK(res, { ...stats, by_mode: byMode, recent });
 });
 
 app.get('/api/rider/performance', auth, roleAuth('rider'), (req, res) => {
@@ -1393,16 +1437,40 @@ app.get('/api/business/invoices', auth, roleAuth('business'), (req, res) => {
 });
 
 // ─── DELIVERY ROUTES ─────────────────────────────────────────
-app.post('/api/deliveries/price', auth, (req, res) => {
-  try {
-    const { pickup_lat, pickup_lng, dest_lat, dest_lng, service_type } = req.body;
-    if (!pickup_lat || !pickup_lng || !dest_lat || !dest_lng || !service_type)
-      return resErr(res, 'Pickup and destination coordinates and service type required');
-    const price = calcPrice(pickup_lat, pickup_lng, dest_lat, dest_lng, service_type);
-    if (!price) return resErr(res, 'Cannot calculate price for this route');
-    resOK(res, price);
-  } catch(e) { resErr(res, e.message); }
-});
+app.post('/api/deliveries/price', auth, route((req, res) => {
+  const { pickup_lat, pickup_lng, dest_lat, dest_lng } = req.body;
+  if (!pickup_lat || !pickup_lng || !dest_lat || !dest_lng)
+    return resErr(res, 'Pickup and destination coordinates are required', 400, 'missing_field');
+  // Either identifier works: `service_mode: 'ride'` from the new apps, or the
+  // bare `service_type` the existing delivery clients already send.
+  const { serviceType } = resolveService(req.body);
+  const price = calcPrice(pickup_lat, pickup_lng, dest_lat, dest_lng, serviceType);
+  if (!price) return resErr(res, 'Cannot calculate price for this route', 400, 'route_unsupported');
+  resOK(res, price);
+}));
+
+/**
+ * The fares available from one pickup, so a customer can compare a ride against
+ * sending a parcel in a single round trip instead of quoting each separately.
+ */
+app.post('/api/mobile/v1/customer/fares', auth, roleAuth('customer', 'business'), route((req, res) => {
+  const pickupLat = validate.latitude(req.body.pickup_lat, 'pickup_lat');
+  const pickupLng = validate.longitude(req.body.pickup_lng, 'pickup_lng');
+  const destLat = validate.latitude(req.body.dest_lat, 'dest_lat');
+  const destLng = validate.longitude(req.body.dest_lng, 'dest_lng');
+  const fares = SERVICE_TYPE_VALUES
+    .map(serviceType => {
+      const price = calcPrice(pickupLat, pickupLng, destLat, destLng, serviceType);
+      return price && {
+        service_mode: price.serviceMode, service_type: serviceType,
+        customer_price: price.customerPrice, distance_km: price.distance_km,
+        estimated_minutes: price.estimatedMinutes
+      };
+    })
+    .filter(Boolean);
+  if (!fares.length) return resErr(res, 'Cannot calculate price for this route', 400, 'route_unsupported');
+  resOK(res, { fares, currency: getConfig('currency', 'RWF'), serverTime: new Date().toISOString() });
+}));
 
 function expireSelectedOffers() {
   const transitioned = db.transaction(() => {
@@ -1714,7 +1782,8 @@ app.put('/api/deliveries/:id/accept', auth, roleAuth('rider'), (req, res) => {
   });
   if (!acceptOffer()) return resErr(res, 'Offer is unavailable or already accepted', 409);
   db.prepare("UPDATE riders SET online_status='busy',availability='busy',accepted_offers=COALESCE(accepted_offers,0)+1 WHERE user_id=?").run(req.user.id);
-  notifyUser(d.customer_id, 'rider_assigned', 'Rider Assigned', `A rider has been assigned to your delivery ${d.order_no}`, { delivery_id: d.id });
+  const assignedCopy = modeCopy(d);
+  notifyUser(d.customer_id, 'rider_assigned', assignedCopy.assignedTitle, assignedCopy.assignedBody(d.order_no), { delivery_id: d.id });
   notifyDeliveryParticipant(d, 'rider_assigned', 'Delivery on the way', `A MOVO rider is collecting a ${d.service_type} addressed to you (${d.order_no}).`);
   emitDeliveryUpdate(d.id, { status: 'assigned', rider_id: req.user.id });
   resOK(res, { message: 'Delivery accepted', delivery: db.prepare('SELECT * FROM deliveries WHERE id=?').get(d.id) });
@@ -1724,7 +1793,7 @@ app.put('/api/deliveries/:id/going-pickup', auth, roleAuth('rider'), (req, res) 
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='assigned'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found');
   updateDeliveryStatus(d.id, 'going_pickup', { lat: req.body.lat, lng: req.body.lng });
-  notifyUser(d.customer_id, 'rider_en_route', 'Rider En Route', `Your rider is heading to pickup for ${d.order_no}`);
+  notifyUser(d.customer_id, 'rider_en_route', modeCopy(d).enRouteTitle, modeCopy(d).enRouteBody(d.order_no));
   resOK(res, { message: 'Status updated' });
 });
 
@@ -1732,7 +1801,7 @@ app.put('/api/deliveries/:id/arrive-pickup', auth, roleAuth('rider'), (req, res)
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='going_pickup'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found');
   updateDeliveryStatus(d.id, 'arrived_pickup', { lat: req.body.lat, lng: req.body.lng });
-  notifyUser(d.customer_id, 'rider_arrived_pickup', 'Rider at Pickup', `Your rider has arrived at the pickup location for ${d.order_no}`, { pickup_otp: d.pickup_otp });
+  notifyUser(d.customer_id, 'rider_arrived_pickup', modeCopy(d).atPickupTitle, modeCopy(d).atPickupBody(d.order_no), { pickup_otp: d.pickup_otp });
   resOK(res, { message: 'Arrived at pickup' });
 });
 
@@ -1743,7 +1812,7 @@ app.put('/api/deliveries/:id/verify-pickup', auth, roleAuth('rider'), (req, res)
   if (d.pickup_otp && otp !== d.pickup_otp && !isMasterOtp(otp)) return resErr(res, 'Invalid pickup OTP');
   const now = new Date().toISOString();
   updateDeliveryStatus(d.id, 'picked_up', { pickup_verified_at: now, pickup_photo: photo||null, lat: req.body.lat, lng: req.body.lng });
-  notifyUser(d.customer_id, 'item_collected', 'Item Collected', `Your item has been picked up for ${d.order_no}`);
+  notifyUser(d.customer_id, 'item_collected', modeCopy(d).boardedTitle, modeCopy(d).boardedBody(d.order_no));
   resOK(res, { message: 'Pickup verified' });
 });
 
@@ -1751,7 +1820,7 @@ app.put('/api/deliveries/:id/in-transit', auth, roleAuth('rider'), (req, res) =>
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='picked_up'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found');
   updateDeliveryStatus(d.id, 'in_transit', { picked_up_at: d.picked_up_at || new Date().toISOString(), lat: req.body.lat, lng: req.body.lng });
-  notifyUser(d.customer_id, 'in_transit', 'Delivery in Transit', `Your ${d.service_type} is on its way for ${d.order_no}`);
+  notifyUser(d.customer_id, 'in_transit', modeCopy(d).movingTitle, modeCopy(d).movingBody(d.order_no));
   resOK(res, { message: 'In transit' });
 });
 
@@ -1759,7 +1828,7 @@ app.put('/api/deliveries/:id/arrive-dest', auth, roleAuth('rider'), (req, res) =
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='in_transit'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found');
   updateDeliveryStatus(d.id, 'arrived_dest', { lat: req.body.lat, lng: req.body.lng });
-  notifyUser(d.customer_id, 'rider_arrived_dest', 'Rider at Destination', `Your rider has arrived at the destination for ${d.order_no}`, { delivery_otp: d.delivery_otp });
+  notifyUser(d.customer_id, 'rider_arrived_dest', modeCopy(d).atDestTitle, modeCopy(d).atDestBody(d.order_no), { delivery_otp: d.delivery_otp });
   // The recipient — who may have no MOVO account — receives the handover code by SMS.
   notifyDeliveryParticipant(d, 'rider_arrived_dest', 'Your MOVO delivery has arrived',
     `Your MOVO rider has arrived for ${d.order_no}. Share code ${d.delivery_otp} only after receiving your item.`);
@@ -1795,7 +1864,7 @@ app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), route((req, res
     payment.run(uuidv4(), d.id, d.customer_id, d.platform_fee, 'platform_fee', d.payment_method, 'completed', now);
   });
   settle();
-  notifyUser(d.customer_id, 'delivered', 'Delivery Completed', `Your ${d.service_type} has been delivered! Order: ${d.order_no}`, { delivery_id: d.id, pod_reference: podReference });
+  notifyUser(d.customer_id, 'delivered', modeCopy(d).completedTitle, modeCopy(d).completedBody(d.order_no), { delivery_id: d.id, pod_reference: podReference });
   notifyDeliveryParticipant(d, 'delivered', 'Delivery completed', `Your MOVO ${d.service_type} (${d.order_no}) was delivered. Proof of delivery: ${podReference}.`);
   audit(req.user.id, 'delivery_completed', 'delivery', d.id, { pod: podReference });
   resOK(res, { message: 'Delivery completed', pod_reference: podReference });
@@ -1813,6 +1882,7 @@ app.put('/api/deliveries/:id/cancel', auth, route((req, res) => {
 
   // A rider was already committed, so a late customer cancellation carries the
   // configured fee (spec §9.7). Cancelling before assignment is always free.
+  const cancelCopy = modeCopy(d);
   const feeApplies = isCustomer && ['assigned'].includes(d.status);
   const cancellationFee = feeApplies ? Number(getConfig('cancel_fee_customer', '0')) || 0 : 0;
   const now = new Date().toISOString();
@@ -1831,12 +1901,12 @@ app.put('/api/deliveries/:id/cancel', auth, route((req, res) => {
   })();
   if (d.rider_id) {
     db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(d.rider_id);
-    notifyUser(d.rider_id, 'delivery_cancelled', 'Delivery Cancelled', `Delivery ${d.order_no} has been cancelled`);
+    notifyUser(d.rider_id, 'delivery_cancelled', cancelCopy.cancelledTitle, `${cancelCopy.Job} ${d.order_no} has been cancelled`);
   }
-  notifyUser(d.customer_id, 'delivery_cancelled', 'Delivery Cancelled',
+  notifyUser(d.customer_id, 'delivery_cancelled', cancelCopy.cancelledTitle,
     cancellationFee > 0
-      ? `Delivery ${d.order_no} was cancelled. A ${cancellationFee} RWF cancellation fee applies.`
-      : `Your delivery ${d.order_no} has been cancelled`);
+      ? `${cancelCopy.Job} ${d.order_no} was cancelled. A ${cancellationFee} RWF cancellation fee applies.`
+      : `Your ${cancelCopy.job} ${d.order_no} has been cancelled`);
   audit(req.user.id, 'delivery_cancelled', 'delivery', d.id, { by: req.user.role, fee: cancellationFee });
   resOK(res, { message: 'Delivery cancelled', cancellation_fee: cancellationFee });
 }));
@@ -1980,7 +2050,24 @@ app.get('/api/admin/dashboard', auth, roleAuth('admin'), (req, res) => {
   const totalBusinesses = db.prepare("SELECT COUNT(*) as c FROM users WHERE role='business'").get().c;
   const monthRevenue = db.prepare("SELECT COALESCE(SUM(platform_fee),0) as t FROM deliveries WHERE status='delivered' AND date(delivered_at)>=date('now','start of month')").get().t;
   const monthDeliveries = db.prepare("SELECT COUNT(*) as c FROM deliveries WHERE status='delivered' AND date(delivered_at)>=date('now','start of month')").get().c;
-  resOK(res, { active, todayDeliveries, todayCompleted, todayRevenue, totalCustomers, totalRiders, onlineRiders, pendingApprovals, openTickets, totalBusinesses, monthRevenue, monthDeliveries });
+  // Operations run two products and need to see them apart, not just in total.
+  const modeRows = db.prepare(`SELECT service_mode,
+      COUNT(*) AS today_requested,
+      SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END) AS today_completed,
+      COALESCE(SUM(CASE WHEN status='delivered' THEN platform_fee ELSE 0 END),0) AS today_revenue
+    FROM deliveries WHERE date(created_at)=date('now') GROUP BY service_mode`).all();
+  const activeByMode = db.prepare("SELECT service_mode, COUNT(*) AS c FROM deliveries WHERE status NOT IN ('delivered','cancelled','failed') GROUP BY service_mode").all();
+  const byMode = Object.fromEntries(SERVICE_MODE_VALUES.map(mode => {
+    const row = modeRows.find(entry => entry.service_mode === mode);
+    return [mode, {
+      active: activeByMode.find(entry => entry.service_mode === mode)?.c || 0,
+      today_requested: row?.today_requested || 0,
+      today_completed: row?.today_completed || 0,
+      today_revenue: row?.today_revenue || 0
+    }];
+  }));
+  const ridersByService = db.prepare("SELECT COALESCE(SUM(accepts_rides),0) AS rides, COALESCE(SUM(accepts_deliveries),0) AS deliveries FROM riders WHERE approval_status='approved'").get();
+  resOK(res, { active, todayDeliveries, todayCompleted, todayRevenue, totalCustomers, totalRiders, onlineRiders, pendingApprovals, openTickets, totalBusinesses, monthRevenue, monthDeliveries, byMode, ridersByService });
 });
 
 app.get('/api/admin/users', auth, roleAuth('admin'), route((req, res) => {
@@ -2056,9 +2143,11 @@ app.put('/api/admin/riders/:id/approve', auth, roleAuth('admin'), (req, res) => 
 
 app.get('/api/admin/deliveries', auth, roleAuth('admin'), route((req, res) => {
   const { status, search } = req.query;
+  const serviceMode = validate.oneOf(req.query.service_mode, SERVICE_MODE_VALUES, 'service_mode', { optional: true });
   const { limit, offset } = validate.pagination(req.query, { defaultLimit: 20, maxLimit: 100 });
   let query = 'SELECT d.*,u1.full_name as customer_name,u2.full_name as rider_name FROM deliveries d LEFT JOIN users u1 ON d.customer_id=u1.id LEFT JOIN users u2 ON d.rider_id=u2.id';
   const conditions = []; const params = [];
+  if (serviceMode) { conditions.push('d.service_mode=?'); params.push(serviceMode); }
   if (status) { conditions.push('d.status=?'); params.push(status); }
   if (search) { conditions.push('(d.order_no LIKE ? OR d.pickup_address LIKE ? OR d.dest_address LIKE ?)'); params.push(`%${search}%`,`%${search}%`,`%${search}%`); }
   if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
@@ -2299,7 +2388,13 @@ app.get('/api/admin/reports', auth, roleAuth('admin'), (req, res) => {
   if (type === 'delivery-status') {
     data = db.prepare('SELECT status, COUNT(*) as count FROM deliveries GROUP BY status').all();
   } else if (type === 'service-type') {
-    data = db.prepare('SELECT service_type, COUNT(*) as count FROM deliveries GROUP BY service_type').all();
+    data = db.prepare('SELECT service_mode, service_type, COUNT(*) as count FROM deliveries GROUP BY service_mode, service_type').all();
+  } else if (type === 'service-mode') {
+    data = db.prepare(`SELECT service_mode, COUNT(*) as count,
+        SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END) as completed,
+        COALESCE(SUM(CASE WHEN status='delivered' THEN total_charge ELSE 0 END),0) as gross,
+        COALESCE(SUM(CASE WHEN status='delivered' THEN platform_fee ELSE 0 END),0) as revenue
+      FROM deliveries GROUP BY service_mode`).all();
   } else if (type === 'top-zones') {
     data = db.prepare("SELECT dest_zone as zone, COUNT(*) as count FROM deliveries WHERE status='delivered' GROUP BY dest_zone ORDER BY count DESC LIMIT 10").all();
   } else if (type === 'rider-performance') {
@@ -2398,7 +2493,7 @@ function dispatchDelivery(deliveryId) {
             search();
           } else {
             updateDeliveryStatus(deliveryId, 'failed', { note: 'No rider found' });
-            notifyUser(d.customer_id, 'no_rider', 'No Rider Available', `We could not find a rider for ${d.order_no}. Please try again.`, { delivery_id: d.id });
+            notifyUser(d.customer_id, 'no_rider', modeCopy(d).noRiderTitle, modeCopy(d).noRiderBody(d.order_no), { delivery_id: d.id });
           }
         }
       }, timeout);
@@ -2408,7 +2503,7 @@ function dispatchDelivery(deliveryId) {
         setTimeout(search, 3000);
       } else {
         updateDeliveryStatus(deliveryId, 'failed', { note: 'No rider found in expanded search' });
-        notifyUser(d.customer_id, 'no_rider', 'No Rider Available', `We could not find a rider for ${d.order_no}.`, { delivery_id: d.id });
+        notifyUser(d.customer_id, 'no_rider', modeCopy(d).noRiderTitle, modeCopy(d).noRiderBody(d.order_no), { delivery_id: d.id });
       }
     }
   }
