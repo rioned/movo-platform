@@ -83,8 +83,12 @@ private fun RouteEndpoint(label: String, address: String, caption: String?) {
  * filled so the customer can see how far a delivery has travelled at a glance.
  */
 @Composable
-fun DeliveryProgress(stage: MovoDeliveryStage, modifier: Modifier = Modifier) {
-    val steps = MovoDeliveryStage.trackedSteps
+fun DeliveryProgress(
+    stage: MovoDeliveryStage,
+    modifier: Modifier = Modifier,
+    mode: MovoServiceMode = MovoServiceMode.Delivery
+) {
+    val steps = trackedSteps(mode)
     val current = stage.trackedStep
     val failed = stage == MovoDeliveryStage.Cancelled || stage == MovoDeliveryStage.Failed
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.tiny)) {

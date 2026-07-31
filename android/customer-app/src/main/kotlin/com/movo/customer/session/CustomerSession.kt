@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.movo.customer.model.*
+import com.movo.design.MovoServiceMode
 import org.json.JSONObject
 
 class CustomerSession(context: Context) {
@@ -28,6 +29,57 @@ class CustomerSession(context: Context) {
             .putString("profileRole", profile.role).apply()
     }
     fun clear() = preferences.edit().clear().apply()
+
+    /**
+     * The product the customer last worked in.
+     *
+     * Remembered so returning to the app resumes where they left off, but the
+     * chooser is still shown on a fresh sign-in: picking a product is a decision,
+     * and a decision silently made for you is one you cannot tell was made.
+     */
+    fun serviceMode(): MovoServiceMode? =
+        preferences.getString("service_mode", null)?.let(MovoServiceMode::from)
+
+    fun saveServiceMode(mode: MovoServiceMode) =
+        preferences.edit().putString("service_mode", mode.apiValue).apply()
+
+    fun saveRideJourney(journey: RideJourney) {
+        val draft = journey.draft
+        val json = JSONObject()
+            .put("pickupLat", draft.pickup?.latitude).put("pickupLng", draft.pickup?.longitude)
+            .put("destinationLat", draft.destination?.latitude).put("destinationLng", draft.destination?.longitude)
+            .put("pickupAddress", draft.pickupAddress).put("destinationAddress", draft.destinationAddress)
+            .put("passengerName", draft.passengerName).put("passengerPhone", draft.passengerPhone)
+            .put("passengerCount", draft.passengerCount).put("hasLuggage", draft.hasLuggage)
+            .put("notes", draft.notes).put("paymentMethod", draft.paymentMethod)
+            .put("quotePrice", journey.quote?.price).put("quoteDistance", journey.quote?.distanceKm)
+            .put("quoteEta", journey.quote?.etaMinutes).put("rideId", journey.rideId)
+            .put("creationIdempotencyKey", journey.creationIdempotencyKey)
+            .put("replacementIdempotencyKey", journey.replacementIdempotencyKey)
+        preferences.edit().putString("rideJourney", json.toString()).apply()
+    }
+
+    fun restoreRideJourney(): RideJourney? = preferences.getString("rideJourney", null)?.let { raw ->
+        runCatching {
+            val json = JSONObject(raw)
+            fun coordinate(lat: String, lng: String): Coordinate? =
+                if (json.isNull(lat) || json.isNull(lng)) null
+                else Coordinate(json.getDouble(lat), json.getDouble(lng)).takeIf { it.isFinite }
+            val draft = RideDraft(
+                coordinate("pickupLat", "pickupLng"), coordinate("destinationLat", "destinationLng"),
+                json.optString("pickupAddress"), json.optString("destinationAddress"),
+                json.optString("passengerName"), json.optString("passengerPhone"),
+                json.optInt("passengerCount", 1).coerceIn(1, 2), json.optBoolean("hasLuggage"),
+                json.optString("notes"), json.optString("paymentMethod", "cash")
+            )
+            val quote = if (json.isNull("quotePrice")) null
+                else Quote(json.getDouble("quotePrice"), json.optDouble("quoteDistance"), json.optInt("quoteEta"))
+            RideJourney(draft, quote, json.optString("rideId").takeIf(String::isNotBlank),
+                json.getString("creationIdempotencyKey"), json.getString("replacementIdempotencyKey"))
+        }.getOrNull()
+    }
+
+    fun clearRideJourney() = preferences.edit().remove("rideJourney").apply()
 
     fun saveJourney(journey: SendJourney) {
         val draft = journey.draft

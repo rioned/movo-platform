@@ -26,8 +26,13 @@ data class Delivery(
     val relationship: String? = null, val orderNo: String? = null, val riderId: String? = null,
     val serviceType: String? = null, val totalCharge: Double? = null, val distanceKm: Double? = null,
     val paymentMethod: String? = null, val paymentStatus: String? = null, val itemDescription: String? = null,
-    val podReference: String? = null
-)
+    val podReference: String? = null, val serviceMode: String? = null, val passengerCount: Int? = null
+) {
+    /** Which product this job is. Rows from before the split carry only a type. */
+    val mode: com.movo.design.MovoServiceMode
+        get() = serviceMode?.let { com.movo.design.MovoServiceMode.from(it) }
+            ?: com.movo.design.MovoServiceMode.forServiceType(serviceType)
+}
 data class TrackingSnapshot(val delivery: Delivery, val riderLocation: Coordinate?, val riderLocationUpdatedAt: String?, val serverTime: String?)
 data class CustomerHome(val active: List<Delivery>, val recent: List<Delivery>, val serverTime: String?)
 data class TimelineEvent(val status: String, val note: String?, val createdAt: String?)
@@ -38,6 +43,31 @@ data class SendDraft(
     val receiverName: String = "", val receiverPhone: String = "",
     val itemType: String = "parcel", val itemDescription: String = "",
     val deliveryInstructions: String = "", val paymentMethod: String = "cash"
+)
+
+/**
+ * A ride request. Deliberately not a [SendDraft] with fields blanked out: a
+ * passenger books their own trip, so there is no sender, no receiver and no item
+ * — and a form that asks for them anyway is the difference between a product
+ * that was designed and one that was retrofitted.
+ */
+data class RideDraft(
+    val pickup: Coordinate? = null, val destination: Coordinate? = null,
+    val pickupAddress: String = "", val destinationAddress: String = "",
+    val passengerName: String = "", val passengerPhone: String = "",
+    val passengerCount: Int = 1, val hasLuggage: Boolean = false,
+    val notes: String = "", val paymentMethod: String = "cash"
+) {
+    val isRoutePlaced: Boolean get() = pickup?.isFinite == true && destination?.isFinite == true
+    /** Everything the fare quote and the booking both need before either is allowed. */
+    val isComplete: Boolean
+        get() = isRoutePlaced && pickupAddress.isNotBlank() && destinationAddress.isNotBlank() &&
+            passengerName.isNotBlank() && passengerPhone.isNotBlank()
+}
+
+data class RideJourney(
+    val draft: RideDraft, val quote: Quote?, val rideId: String?,
+    val creationIdempotencyKey: String, val replacementIdempotencyKey: String
 )
 data class SendJourney(
     val draft: SendDraft, val quote: Quote?, val deliveryId: String?,
@@ -73,6 +103,8 @@ fun JSONObject.toDelivery(): Delivery {
         string("relationship", "participant_role"), string("order_no", "orderNo"), string("rider_id"),
         string("service_type", "serviceType"), double("total_charge", "customer_price", "totalCharge"),
         double("distance_km", "distanceKm"), string("payment_method"), string("payment_status"),
-        string("item_description"), string("pod_reference")
+        string("item_description"), string("pod_reference"),
+        string("service_mode", "serviceMode"),
+        opt("passenger_count")?.toString()?.toIntOrNull()
     )
 }
