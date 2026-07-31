@@ -17,8 +17,10 @@ import com.movo.design.MovoAvatar
 import com.movo.design.MovoBanner
 import com.movo.design.MovoButton
 import com.movo.design.MovoCard
+import com.movo.design.MovoServiceMode
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
+import com.movo.design.ServiceModeBadge
 import com.movo.design.StatusPill
 import com.movo.design.formatRwf
 import com.movo.rider.RiderMap
@@ -58,7 +60,8 @@ fun RiderHomeScreen(
             pickupLat = offer.pickupLat, pickupLng = offer.pickupLng,
             destinationAddress = offer.destinationAddress, destinationName = "", destinationPhone = "",
             destinationLat = offer.destinationLat, destinationLng = offer.destinationLng,
-            earnings = offer.earnings, distanceKm = offer.distanceKm, itemDescription = null, specialInstructions = null
+            earnings = offer.earnings, distanceKm = offer.distanceKm, itemDescription = null, specialInstructions = null,
+            serviceMode = offer.serviceMode, passengerCount = offer.passengerCount, hasLuggage = offer.hasLuggage
         )
     }
 
@@ -137,6 +140,7 @@ private fun RiderStatusHeader(
                 Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small), verticalAlignment = Alignment.CenterVertically) {
                     StatusPill(
                         when {
+                            state.activeDelivery?.mode?.isRide == true -> "On a trip"
                             state.activeDelivery != null -> "On a delivery"
                             state.profile.availability == "online" -> "Online"
                             state.profile.availability == "unavailable" -> "On a break"
@@ -165,19 +169,31 @@ private fun IdleSheet(state: RiderHomeState, busy: Boolean, online: Boolean, onG
         Modifier.padding(MovoSpacing.default),
         color = MaterialTheme.colorScheme.surface
     ) {
+        // Naming the products they are actually queued for is what makes a quiet
+        // hour readable: no offers because it is quiet, or because rides are off?
+        val services = when {
+            state.profile.acceptsRides && state.profile.acceptsDeliveries -> "rides and deliveries"
+            state.profile.acceptsRides -> "rides"
+            else -> "deliveries"
+        }
         if (state.profile.availability == "online") {
             Text("Waiting for offers", style = MaterialTheme.typography.titleLarge)
             Text(
-                "You are visible to customers near you. Keep the app open so offers arrive instantly.",
+                "You are visible to customers near you and queued for $services. Keep the app open so offers arrive instantly.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(Modifier.height(MovoSpacing.medium))
+            Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                if (state.profile.acceptsRides) ServiceModeBadge(MovoServiceMode.Ride)
+                if (state.profile.acceptsDeliveries) ServiceModeBadge(MovoServiceMode.Delivery)
+            }
             Spacer(Modifier.height(MovoSpacing.default))
             com.movo.design.MovoSecondaryButton("Go offline", onGoOffline, enabled = !busy)
         } else {
             Text("You are offline", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (state.profile.isApproved) "Go online to start receiving MOVO delivery offers near you."
+                if (state.profile.isApproved) "Go online to start receiving MOVO $services near you."
                 else "You can go online once MOVO verifies your documents.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

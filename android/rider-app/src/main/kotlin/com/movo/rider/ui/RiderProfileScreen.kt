@@ -15,9 +15,11 @@ import com.movo.design.MovoButtonTone
 import com.movo.design.MovoCard
 import com.movo.design.MovoField
 import com.movo.design.MovoSecondaryButton
+import com.movo.design.MovoServiceMode
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
 import com.movo.design.SectionHeader
+import com.movo.design.ServiceModeBadge
 import com.movo.design.SegmentOption
 import com.movo.design.SegmentedChoice
 import com.movo.design.StatTile
@@ -46,6 +48,7 @@ fun RiderProfileScreen(
     onUploadDocument: (String) -> Unit,
     onSaveMotorcycle: (RiderProfile) -> Unit,
     onAvailabilityChange: (String) -> Unit,
+    onSaveServices: (acceptsRides: Boolean, acceptsDeliveries: Boolean) -> Unit,
     onSignOut: () -> Unit
 ) {
     var plate by remember(profile.motorcyclePlate) { mutableStateOf(profile.motorcyclePlate) }
@@ -126,6 +129,9 @@ fun RiderProfileScreen(
         }
 
         Spacer(Modifier.height(MovoSpacing.medium))
+        ServicesCard(profile, onSaveServices)
+
+        Spacer(Modifier.height(MovoSpacing.medium))
         MovoCard {
             SectionHeader("Motorcycle")
             MovoField(plate, { plate = it.uppercase() }, "Plate number")
@@ -169,5 +175,71 @@ fun RiderProfileScreen(
         Spacer(Modifier.height(MovoSpacing.large))
         MovoButton("Sign out", onSignOut, tone = MovoButtonTone.Danger)
         Spacer(Modifier.height(MovoSpacing.section))
+    }
+}
+
+/**
+ * Which MOVO products this rider works.
+ *
+ * This is a real dispatch filter, not a display preference: a product switched off
+ * here stops producing offers entirely, so a rider who does not want passengers
+ * never has to decline one and never pays for it in their acceptance rate.
+ *
+ * The last enabled product cannot be switched off — a rider accepting nothing
+ * would sit online receiving silence with no way to work out why — so the toggle
+ * is disabled at that point and says so, rather than failing on the server.
+ */
+@Composable
+private fun ServicesCard(
+    profile: RiderProfile,
+    onSaveServices: (acceptsRides: Boolean, acceptsDeliveries: Boolean) -> Unit
+) {
+    MovoCard {
+        SectionHeader("What you want to carry")
+        Text(
+            "MOVO only sends you offers for the services you keep on.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(MovoSpacing.medium))
+
+        ServiceToggle(
+            mode = MovoServiceMode.Ride,
+            description = "Carry passengers on your motorcycle",
+            checked = profile.acceptsRides,
+            // Only blocked when this is the last one left on.
+            enabled = profile.acceptsDeliveries,
+            onChange = { onSaveServices(it, profile.acceptsDeliveries) }
+        )
+        Spacer(Modifier.height(MovoSpacing.small))
+        ServiceToggle(
+            mode = MovoServiceMode.Delivery,
+            description = "Carry parcels and documents",
+            checked = profile.acceptsDeliveries,
+            enabled = profile.acceptsRides,
+            onChange = { onSaveServices(profile.acceptsRides, it) }
+        )
+
+        if (!(profile.acceptsRides && profile.acceptsDeliveries)) {
+            Spacer(Modifier.height(MovoSpacing.small))
+            MovoBanner("Keep at least one service on so MOVO can send you work.", MovoTone.Info)
+        }
+    }
+}
+
+@Composable
+private fun ServiceToggle(
+    mode: MovoServiceMode,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        ServiceModeBadge(mode)
+        Column(Modifier.weight(1f).padding(horizontal = MovoSpacing.medium)) {
+            Text(description, style = MaterialTheme.typography.bodyMedium)
+        }
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled || !checked)
     }
 }

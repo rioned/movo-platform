@@ -353,6 +353,10 @@ class MainActivity : ComponentActivity() {
                                     busy = false
                                 }
                             },
+                            onSaveServices = { rides, deliveries ->
+                                busy = true
+                                lifecycleScope.launch { controller.setServices(rides, deliveries); busy = false }
+                            },
                             onSignOut = {
                                 stopLocationSharing()
                                 realtime?.disconnect(); realtime = null
