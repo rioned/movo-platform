@@ -8,7 +8,9 @@
     "dev": "node --watch server.js",
     "test": "node --test test/*.test.js",
     "test:syntax": "node --check server.js && node --check public/portal-auth.js",
-    "start:pm2": "pm2 start ecosystem.config.js --update-env"
+    "start:pm2": "pm2 start ecosystem.config.js --update-env",
+    "android:build": "cd android && ./gradlew assembleDebug",
+    "android:test": "cd android && ./gradlew testDebugUnitTest"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -20,5 +22,8 @@
     "pm2": "^7.0.3",
     "socket.io": "^4.7.4",
     "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.4"
   }
 }

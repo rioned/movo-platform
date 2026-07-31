@@ -30,3 +30,9 @@ node_modules/
 # Uploads
 uploads/
 movo.db
+movo.db-shm
+movo.db-wal
+
+# Local tooling artifacts
+.superpowers/
+.playwright-cli/

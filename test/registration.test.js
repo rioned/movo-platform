@@ -12,7 +12,7 @@ const base = `http://127.0.0.1:${port}`;
 const dbPath = path.join(os.tmpdir(), `movo-registration-${process.pid}-${Date.now()}.db`);
 let db;
 let server;
-const phoneFor = role => `+25079${Date.now().toString().slice(-7)}${{ customer: '1', rider: '2', business: '3' }[role]}`;
+const phoneFor = role => `+25079${Date.now().toString().slice(-6)}${{ customer: '1', rider: '2', business: '3' }[role]}`;
 
 test.before(async () => {
   server = spawn(process.execPath, ['server.js'], {
@@ -50,7 +50,7 @@ async function registerAndVerify(role, extra = {}) {
   const verified = await verifyResponse.json();
   assert.equal(verified.success, true, verified.error);
   assert.equal(verified.data.user.role, role);
-  return { phone, user: verified.data.user };
+  return { phone: verified.data.user.phone, user: verified.data.user };
 }
 
 test('customer registration creates an active customer', async () => {

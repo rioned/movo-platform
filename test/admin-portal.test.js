@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Database = require('better-sqlite3');
+const { io } = require('socket.io-client');
 
 const root = path.resolve(__dirname, '..');
 const port = 31000 + Math.floor(Math.random() * 1000);
@@ -27,7 +28,7 @@ async function request(pathname, { token, method = 'GET', body } = {}) {
 }
 
 async function register(role, suffix, extra = {}) {
-  const phone = `+25078${String(suffix).padStart(8, '0')}`;
+  const phone = `+25078${String(suffix).padStart(7, '0')}`;
   const registration = await request('/api/auth/register', {
     method: 'POST',
     body: { role, phone, full_name: `${role} admin portal test`, password: 'Passw0rd!', ...extra }
@@ -85,6 +86,19 @@ test('admin portal APIs support every rendered management view and mutation', as
   await request('/api/rider/status', { token: rider.token, method: 'PUT', body: { online: true } });
   await request('/api/rider/location', { token: rider.token, method: 'PUT', body: { lat: -1.9441, lng: 30.0619 } });
 
+  const riderSocket = io(base, { transports: ['websocket'], reconnection: false, forceNew: true });
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out connecting rider socket')), 3000);
+    riderSocket.once('connect', () => { clearTimeout(timeout); resolve(); });
+    riderSocket.once('connect_error', reject);
+  });
+  riderSocket.emit('authenticate', rider.token);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const realtimeOfferPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out waiting for realtime delivery offer')), 3000);
+    riderSocket.once('new_delivery', offer => { clearTimeout(timeout); resolve(offer); });
+  });
+
   const deliveryResult = await request('/api/deliveries', {
     token: customer.token,
     method: 'POST',
@@ -95,6 +109,16 @@ test('admin portal APIs support every rendered management view and mutation', as
     }
   });
   const deliveryId = deliveryResult.delivery.id;
+  const realtimeOffer = await realtimeOfferPromise;
+  riderSocket.disconnect();
+  assert.equal(realtimeOffer.pickup_name, 'Sender');
+  assert.equal(realtimeOffer.pickup_phone, deliveryResult.delivery.pickup_phone);
+  assert.equal(realtimeOffer.pickup_lat, -1.9441);
+  assert.equal(realtimeOffer.pickup_lng, 30.0619);
+  assert.equal(realtimeOffer.dest_name, 'Recipient');
+  assert.equal(realtimeOffer.dest_phone, deliveryResult.delivery.dest_phone);
+  assert.equal(realtimeOffer.dest_lat, -1.9534);
+  assert.equal(realtimeOffer.dest_lng, 30.0585);
   const riderHome = await request('/api/mobile/v1/rider/home', { token: rider.token });
   assert.equal(riderHome.approval_status, 'approved');
   assert.equal(riderHome.online_status, 'online');

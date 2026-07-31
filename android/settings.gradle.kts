@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "movo-android"
-include(":customer-app", ":rider-app")
+include(":design", ":customer-app", ":rider-app")

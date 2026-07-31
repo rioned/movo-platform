@@ -1,1 +1,11 @@
-<resources><style name="Theme.Movo" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#0A6847</item><item name="android:navigationBarColor">#F7FAF8</item></style></resources>
+<resources>
+  <!-- Launch theme only: Compose owns the in-app appearance, including dark mode. -->
+  <style name="Theme.Movo" parent="android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:fontFamily">sans-serif</item>
+    <item name="android:colorAccent">#086B4D</item>
+    <item name="android:colorBackground">#F6F8F7</item>
+    <item name="android:statusBarColor">@android:color/transparent</item>
+    <item name="android:navigationBarColor">#FCFCFA</item>
+    <item name="android:windowLightStatusBar">true</item>
+  </style>
+</resources>
