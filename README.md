@@ -155,6 +155,8 @@ The server listens on `http://localhost:3000` by default. Open one of these port
 
 The application creates `movo.db` and `uploads/` on first start. These are runtime data and should not be committed.
 
+While testing, the master OTP **`000000`** clears every verification prompt — sign-up, login, pickup handover, and delivery handover — so no SMS is needed. Handover codes are four digits, so `0000` is accepted there too. This is a non-production convenience: the server refuses to start if `MASTER_OTP` is set with `NODE_ENV=production`, and uses of the master code are tagged in the audit log. Set `MASTER_OTP=` (empty) to turn it off, or `MASTER_OTP=4242` to pick another code.
+
 ## Configuration
 
 Copy `.env.example` to `.env` for local development. Supported settings include:
@@ -167,6 +169,7 @@ Copy `.env.example` to `.env` for local development. Supported settings include:
 | `ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated CORS origins |
 | `DB_PATH` | `./movo.db` | SQLite database path |
 | `OTP_TEST_MODE` | `false` | Test-only OTP behavior; never enable for public production traffic |
+| `MASTER_OTP` | `000000` outside production | Fixed code that clears every OTP prompt while testing; set empty to disable. Setting it in production is a startup error |
 | `MAP_PROVIDER` | `sandbox` | `sandbox` or `osm` |
 | `PAYMENT_PROVIDER` | `sandbox` | `sandbox`, `mtn-momo`, or `airtel-money` |
 | `SMS_PROVIDER` | `sandbox` | `sandbox` or `twilio` |

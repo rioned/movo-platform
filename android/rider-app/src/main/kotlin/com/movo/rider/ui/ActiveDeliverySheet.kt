@@ -29,6 +29,9 @@ import com.movo.design.MovoSpacing
 import com.movo.design.MovoTextAction
 import com.movo.design.MovoTone
 import com.movo.design.RouteCard
+import com.movo.design.ServiceModeBadge
+import com.movo.design.accent
+import com.movo.design.riderLabel
 import com.movo.design.StatusPill
 import com.movo.design.formatDistance
 import com.movo.design.formatRwf
@@ -54,39 +57,54 @@ fun ActiveDeliverySheet(
     onReportIssue: () -> Unit
 ) {
     val stage = MovoDeliveryStage.from(delivery.status)
-    val action = nextRiderAction(delivery.status)
+    val mode = delivery.mode
+    val action = nextRiderAction(delivery.status, mode)
     val headingToPickup = stage.trackedStep <= 3
     var recipientName by remember(delivery.id) { mutableStateOf(delivery.destinationName) }
 
     MovoSheet {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column {
-                    Text(stage.riderLabel, style = MaterialTheme.typography.titleLarge)
+                Column(Modifier.weight(1f)) {
+                    ServiceModeBadge(mode)
+                    Spacer(Modifier.height(MovoSpacing.tiny))
+                    Text(stage.riderLabel(mode), style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "${serviceLabel(delivery.serviceType)} • ${delivery.orderNo}",
+                        "${serviceLabel(delivery.serviceType, mode)} • ${delivery.orderNo}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(formatRwf(delivery.earnings), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(formatRwf(delivery.earnings), style = MaterialTheme.typography.titleMedium, color = mode.accent())
                     Text(formatDistance(delivery.distanceKm), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
             Spacer(Modifier.height(MovoSpacing.medium))
-            DeliveryProgress(stage)
+            DeliveryProgress(stage, mode = mode)
             Spacer(Modifier.height(MovoSpacing.default))
 
+            val contact = listOf(delivery.pickupName, delivery.pickupPhone).filter(String::isNotBlank).joinToString(" · ")
             RouteCard(
                 pickup = delivery.pickupAddress,
                 destination = delivery.destinationAddress,
-                pickupCaption = "Customer pickup • ${listOf(delivery.pickupName, delivery.pickupPhone).filter(String::isNotBlank).joinToString(" · ")}",
-                destinationCaption = "Delivery destination • ${listOf(delivery.destinationName, delivery.destinationPhone).filter(String::isNotBlank).joinToString(" · ")}"
+                pickupCaption = if (mode.isRide) "Passenger • $contact" else "Customer pickup • $contact",
+                // On a ride both endpoints belong to the same person, so repeating
+                // their name at the drop-off would be noise.
+                destinationCaption = if (mode.isRide) "Drop-off"
+                    else "Delivery destination • ${listOf(delivery.destinationName, delivery.destinationPhone).filter(String::isNotBlank).joinToString(" · ")}"
             )
 
-            delivery.itemDescription?.takeIf { it.isNotBlank() }?.let {
+            if (mode.isRide) {
+                Spacer(Modifier.height(MovoSpacing.small))
+                val load = buildList {
+                    add(if (delivery.passengerCount > 1) "${delivery.passengerCount} passengers" else "1 passenger")
+                    if (delivery.hasLuggage) add("has a bag")
+                }.joinToString(" • ")
+                Text(load, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            delivery.itemDescription?.takeIf { it.isNotBlank() && !mode.isRide }?.let {
                 Spacer(Modifier.height(MovoSpacing.small))
                 Text("Item: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -97,7 +115,12 @@ fun ActiveDeliverySheet(
             Spacer(Modifier.height(MovoSpacing.medium))
             Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
                 MovoSecondaryButton(
-                    if (headingToPickup) "Navigate to pickup" else "Navigate to destination",
+                    when {
+                        headingToPickup && mode.isRide -> "Navigate to passenger"
+                        headingToPickup -> "Navigate to pickup"
+                        mode.isRide -> "Navigate to drop-off"
+                        else -> "Navigate to destination"
+                    },
                     {
                         if (headingToPickup) onNavigate(delivery.pickupLat, delivery.pickupLng)
                         else onNavigate(delivery.destinationLat, delivery.destinationLng)
@@ -106,7 +129,7 @@ fun ActiveDeliverySheet(
                     leading = { Icon(Icons.Filled.Place, contentDescription = null, modifier = Modifier.size(16.dp)) }
                 )
                 MovoSecondaryButton(
-                    "Call customer",
+                    if (mode.isRide) "Call passenger" else "Call customer",
                     { onCall(if (headingToPickup) delivery.pickupPhone else delivery.destinationPhone) },
                     Modifier.weight(1f),
                     leading = { Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(16.dp)) }
@@ -115,23 +138,34 @@ fun ActiveDeliverySheet(
 
             if (delivery.requiresVerification) {
                 Spacer(Modifier.height(MovoSpacing.medium))
+                val boarding = mode.isRide && delivery.status == "arrived_pickup"
                 StatusPill(
-                    if (delivery.status == "arrived_pickup") "Ask the sender for the pickup code" else "Ask the recipient for the handover code",
+                    when {
+                        boarding -> "Ask your passenger for their boarding code"
+                        delivery.status == "arrived_pickup" -> "Ask the sender for the pickup code"
+                        else -> "Ask the recipient for the handover code"
+                    },
                     MovoTone.Warning
                 )
                 Spacer(Modifier.height(MovoSpacing.small))
                 MovoField(
                     value = otp,
                     onValueChange = { onOtpChange(it.filter(Char::isDigit).take(6)) },
-                    label = if (delivery.status == "arrived_pickup") "Pickup code" else "Delivery code",
+                    label = when {
+                        boarding -> "Boarding code"
+                        delivery.status == "arrived_pickup" -> "Pickup code"
+                        else -> "Delivery code"
+                    },
                     keyboardType = KeyboardType.NumberPassword,
-                    supporting = "The customer reads this code from their MOVO app"
+                    supporting = if (boarding) "Your passenger reads this code from their MOVO app"
+                        else "The customer reads this code from their MOVO app"
                 )
-                if (delivery.status == "arrived_dest") {
+                if (delivery.status == "arrived_dest" && !mode.isRide) {
                     Spacer(Modifier.height(MovoSpacing.small))
                     MovoField(recipientName, { recipientName = it }, "Who received the item?")
                 }
-                MovoTextAction("Attach proof photo", onAddProof, Modifier.fillMaxWidth())
+                // A trip has no parcel to photograph.
+                if (!mode.isRide) MovoTextAction("Attach proof photo", onAddProof, Modifier.fillMaxWidth())
             }
 
             Spacer(Modifier.height(MovoSpacing.medium))

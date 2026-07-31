@@ -11,9 +11,12 @@ import androidx.compose.ui.unit.dp
 import com.movo.design.EmptyState
 import com.movo.design.MovoBanner
 import com.movo.design.MovoCard
+import com.movo.design.MovoServiceMode
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
 import com.movo.design.SectionHeader
+import com.movo.design.ServiceModeBadge
+import com.movo.design.accent
 import com.movo.design.SegmentOption
 import com.movo.design.SegmentedChoice
 import com.movo.design.ShimmerCard
@@ -22,6 +25,7 @@ import com.movo.design.formatRwf
 import com.movo.design.formatTimestamp
 import com.movo.design.plural
 import com.movo.rider.model.EarningsSummary
+import com.movo.rider.model.ModeEarnings
 import com.movo.rider.model.PerformanceStats
 
 /**
@@ -65,10 +69,23 @@ fun EarningsScreen(
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Text(
-                "${plural(summary?.count ?: 0, "completed delivery", "completed deliveries")} • ${formatRwf(summary?.platformFees ?: 0.0)} platform fees",
+                "${plural(summary?.count ?: 0, "completed job")} • ${formatRwf(summary?.platformFees ?: 0.0)} platform fees",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
+        }
+
+        // Only split the total for a rider who actually worked both products —
+        // for anyone else it is a row of zeroes saying nothing.
+        if (summary?.worksBothProducts == true) {
+            Spacer(Modifier.height(MovoSpacing.medium))
+            MovoCard {
+                SectionHeader("Where it came from")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                    ModeEarningsTile(MovoServiceMode.Ride, summary.rides, Modifier.weight(1f))
+                    ModeEarningsTile(MovoServiceMode.Delivery, summary.deliveries, Modifier.weight(1f))
+                }
+            }
         }
 
         Spacer(Modifier.height(MovoSpacing.medium))
@@ -76,7 +93,7 @@ fun EarningsScreen(
             MovoCard {
                 SectionHeader("Performance")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    StatTile("Deliveries", "${stats.totalDeliveries}")
+                    StatTile("Completed", "${stats.totalDeliveries}")
                     StatTile("Acceptance", "${stats.acceptanceRate}%")
                     StatTile("Cancellation", "${stats.cancellationRate}%")
                     StatTile("Rating", if (stats.ratingCount > 0) String.format("%.1f", stats.rating) else "—")
@@ -88,8 +105,8 @@ fun EarningsScreen(
         SectionHeader("Recent settlements")
         if (summary == null || summary.entries.isEmpty()) {
             EmptyState(
-                title = "No completed deliveries in this period",
-                message = "Go online to start receiving delivery offers near you."
+                title = "No completed jobs in this period",
+                message = "Go online to start receiving offers near you."
             )
         } else {
             LazyColumn(
@@ -100,7 +117,10 @@ fun EarningsScreen(
                     MovoCard {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(entry.orderNo, style = MaterialTheme.typography.titleSmall)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                                    ServiceModeBadge(entry.mode)
+                                    Text(entry.orderNo, style = MaterialTheme.typography.titleSmall)
+                                }
                                 Text(
                                     entry.route,
                                     style = MaterialTheme.typography.bodySmall,
@@ -111,11 +131,25 @@ fun EarningsScreen(
                                     Text(formatTimestamp(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-                            Text(formatRwf(entry.amount), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                            Text(formatRwf(entry.amount), style = MaterialTheme.typography.titleMedium, color = entry.mode.accent())
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ModeEarningsTile(mode: MovoServiceMode, earnings: ModeEarnings, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        ServiceModeBadge(mode)
+        Spacer(Modifier.height(MovoSpacing.small))
+        Text(formatRwf(earnings.total), style = MaterialTheme.typography.titleLarge, color = mode.accent())
+        Text(
+            plural(earnings.count, if (mode.isRide) "trip" else "delivery", if (mode.isRide) "trips" else "deliveries"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

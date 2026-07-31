@@ -25,17 +25,21 @@ import androidx.lifecycle.lifecycleScope
 import com.movo.customer.activity.ActivityScreen
 import com.movo.customer.auth.*
 import com.movo.customer.connectivity.ConnectivityObserver
+import com.movo.customer.mode.ModeSelectScreen
 import com.movo.customer.model.CustomerProfile
 import com.movo.customer.model.toProfile
 import com.movo.customer.network.CustomerApi
 import com.movo.customer.network.CustomerApiException
 import com.movo.customer.profile.ProfileScreen
 import com.movo.customer.receive.ReceiveScreen
+import com.movo.customer.ride.RideScreen
 import com.movo.customer.send.SendScreen
 import com.movo.customer.session.CustomerSession
 import com.movo.customer.tracking.TrackingScreen
+import com.movo.design.ModeSwitcher
 import com.movo.design.MovoBanner
 import com.movo.design.MovoPalette
+import com.movo.design.MovoServiceMode
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTheme
 import com.movo.design.MovoTone
@@ -51,12 +55,26 @@ private val RoadInk = Color(0xFF151817)
 private val MotoAmber = Color(0xFFF5A623)
 
 enum class CustomerDestination(val label: String, val icon: ImageVector) {
+    Ride("Ride", Icons.Filled.Person),
     Send("Send", Icons.Filled.Send),
     Receive("Receive", Icons.Filled.MailOutline),
     Activity("Activity", Icons.Filled.List),
     Profile("Account", Icons.Filled.Person),
     Tracking("Tracking", Icons.Filled.Send)
 }
+
+/**
+ * The tabs a mode offers. Ride has no "Receive" — nobody receives a passenger on
+ * your behalf — so the bar reshapes rather than showing a tab that does nothing.
+ */
+private fun destinationsFor(mode: MovoServiceMode): List<CustomerDestination> = when (mode) {
+    MovoServiceMode.Ride -> listOf(CustomerDestination.Ride, CustomerDestination.Activity, CustomerDestination.Profile)
+    MovoServiceMode.Delivery -> listOf(CustomerDestination.Send, CustomerDestination.Receive, CustomerDestination.Activity, CustomerDestination.Profile)
+}
+
+/** The tab a mode opens on. */
+private fun homeFor(mode: MovoServiceMode): CustomerDestination =
+    if (mode.isRide) CustomerDestination.Ride else CustomerDestination.Send
 
 class MainActivity : ComponentActivity() {
     private lateinit var session: CustomerSession
@@ -67,6 +85,15 @@ class MainActivity : ComponentActivity() {
     private var authLoading by mutableStateOf(false)
     private var authError by mutableStateOf<String?>(null)
     private var pendingVerificationPhone by mutableStateOf<String?>(null)
+
+    /**
+     * The product the customer is working in, or null while the chooser is up.
+     *
+     * A restored session resumes its last product, but a fresh sign-in always
+     * lands on the chooser: which product you want is the first thing MOVO asks,
+     * not something it assumes on your behalf.
+     */
+    private var serviceMode by mutableStateOf<MovoServiceMode?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +106,8 @@ class MainActivity : ComponentActivity() {
         val cached = session.profile()?.takeIf { it.role == "customer" }
         if (session.token() == null) { if (session.profile() != null) session.clear(); restoring = false; return }
         profile = cached
+        // Resuming an existing session keeps the product they were last using.
+        serviceMode = session.serviceMode()
         lifecycleScope.launch {
             runCatching { api.get("/api/auth/me").dataObject().toProfile() }
                 .onSuccess {
@@ -108,7 +137,13 @@ class MainActivity : ComponentActivity() {
                     if (it.role != "customer") throw IllegalArgumentException("This app requires a customer account.")
                     session.save(token, it)
                 }
-            }.onSuccess { profile = it; pendingVerificationPhone = null }
+            }.onSuccess {
+                profile = it
+                pendingVerificationPhone = null
+                // A fresh sign-in always shows the chooser, pre-selected with the
+                // product this device used last.
+                serviceMode = null
+            }
                 .onFailure { failure ->
                     if (failure is VerificationRequired) {
                         pendingVerificationPhone = failure.phone
@@ -121,17 +156,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun signOut() {
+        session.clear()
+        profile = null
+        serviceMode = null
+    }
+
     @Composable private fun AppContent() {
         val online by connectivity.connected.collectAsState(initial = false)
+        val currentProfile = profile
+        val currentMode = serviceMode
         when {
             restoring -> SplashScreen()
-            profile == null -> AuthScreen(
+            currentProfile == null -> AuthScreen(
                 isLoading = authLoading,
                 error = authError,
                 verificationPhone = pendingVerificationPhone,
                 onSubmit = ::authenticate
             )
-            else -> CustomerShell(profile!!, api, session, online) { profile = null }
+            currentMode == null -> ModeSelectScreen(
+                customerName = currentProfile.name,
+                initialMode = session.serviceMode(),
+                onConfirm = { chosen -> session.saveServiceMode(chosen); serviceMode = chosen },
+                onSignOut = ::signOut
+            )
+            else -> CustomerShell(
+                profile = currentProfile,
+                api = api,
+                session = session,
+                online = online,
+                mode = currentMode,
+                onModeChange = { chosen -> session.saveServiceMode(chosen); serviceMode = chosen },
+                onSignedOut = ::signOut
+            )
         }
     }
 }
@@ -150,7 +207,7 @@ private fun SplashScreen() {
         ) {
             Text("MOVO", style = MaterialTheme.typography.displaySmall, color = Color.White)
             Text(
-                "Deliver with Confidence",
+                "Ride and send with confidence",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Color.White.copy(alpha = 0.88f)
             )
@@ -164,24 +221,41 @@ private class VerificationRequired(val phone: String) : Exception()
 internal fun JSONObject.dataObject(): JSONObject = optJSONObject("data") ?: this
 
 @Composable
-private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: CustomerSession, online: Boolean, onSignedOut: () -> Unit) {
-    var destination by rememberSaveable { mutableStateOf(CustomerDestination.Send) }
+private fun CustomerShell(
+    profile: CustomerProfile,
+    api: CustomerApi,
+    session: CustomerSession,
+    online: Boolean,
+    mode: MovoServiceMode,
+    onModeChange: (MovoServiceMode) -> Unit,
+    onSignedOut: () -> Unit
+) {
+    val home = homeFor(mode)
+    var destination by rememberSaveable(mode) { mutableStateOf(home) }
     var trackingDeliveryId by rememberSaveable { mutableStateOf<String?>(null) }
-    val mainDestinations = listOf(CustomerDestination.Send, CustomerDestination.Receive, CustomerDestination.Activity, CustomerDestination.Profile)
+    val mainDestinations = destinationsFor(mode)
     fun openTracking(id: String) { trackingDeliveryId = id; destination = CustomerDestination.Tracking }
-    LaunchedEffect(online) {
+    LaunchedEffect(online, mode) {
         if (!online) return@LaunchedEffect
         runCatching {
-            val home = api.get("/api/mobile/v1/customer/home").dataObject()
-            val activeSent = home.optJSONArray("activeSent"); val activeReceived = home.optJSONArray("activeReceived")
-            activeSent?.optJSONObject(0) ?: activeReceived?.optJSONObject(0)
+            val payload = api.get("/api/mobile/v1/customer/home").dataObject()
+            val activeSent = payload.optJSONArray("activeSent"); val activeReceived = payload.optJSONArray("activeReceived")
+            // Only resume a job belonging to the product currently on screen —
+            // switching to Ride should not reopen tracking for a parcel.
+            val candidates = buildList {
+                for (index in 0 until (activeSent?.length() ?: 0)) activeSent?.optJSONObject(index)?.let(::add)
+                for (index in 0 until (activeReceived?.length() ?: 0)) activeReceived?.optJSONObject(index)?.let(::add)
+            }
+            candidates.firstOrNull { MovoServiceMode.from(it.optString("service_mode")) == mode }
         }.getOrNull()?.let { active ->
             val id = active.optString("id"); val status = active.optString("status")
-            if (status == "awaiting_rider_selection" && session.restoreJourney()?.deliveryId == id) destination = CustomerDestination.Send
+            val awaitingThisJourney = if (mode.isRide) session.restoreRideJourney()?.rideId == id
+                else session.restoreJourney()?.deliveryId == id
+            if (status == "awaiting_rider_selection" && awaitingThisJourney) destination = home
             else if (id.isNotBlank()) openTracking(id)
         }
     }
-    BackHandler(destination != CustomerDestination.Send) { destination = CustomerDestination.Send }
+    BackHandler(destination != home) { destination = home }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
@@ -205,6 +279,16 @@ private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: C
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            // The product switcher rides above the working area, so changing
+            // product is always one tap away and never a hunt through settings.
+            if (destination != CustomerDestination.Tracking) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.small),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    ModeSwitcher(selected = mode, onSelect = onModeChange)
+                }
+            }
             // Connectivity is a first-class state in Kigali: say it plainly (spec §17).
             AnimatedVisibility(visible = !online, enter = fadeIn(), exit = fadeOut()) {
                 MovoBanner(
@@ -215,13 +299,14 @@ private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: C
             }
             Box(Modifier.weight(1f)) {
                 when (destination) {
+                    CustomerDestination.Ride -> RideScreen(api, profile, session, online, onTracking = ::openTracking)
                     CustomerDestination.Send -> SendScreen(api, profile, session, online, onTracking = ::openTracking)
                     CustomerDestination.Receive -> ReceiveScreen(api, onTrack = ::openTracking)
-                    CustomerDestination.Activity -> ActivityScreen(api, onTrack = ::openTracking)
-                    CustomerDestination.Profile -> ProfileScreen(profile, api, connected = online, onClose = { destination = CustomerDestination.Send }) { session.clear(); onSignedOut() }
+                    CustomerDestination.Activity -> ActivityScreen(api, mode = mode, onTrack = ::openTracking)
+                    CustomerDestination.Profile -> ProfileScreen(profile, api, connected = online, onClose = { destination = home }, onSignOut = onSignedOut)
                     CustomerDestination.Tracking -> trackingDeliveryId?.let { id ->
-                        TrackingScreen(id, api, session.token().orEmpty(), session, online, onBack = { destination = CustomerDestination.Send }, onReselect = { destination = CustomerDestination.Send })
-                    } ?: Placeholder("No delivery selected")
+                        TrackingScreen(id, api, session.token().orEmpty(), session, online, onBack = { destination = home }, onReselect = { destination = home })
+                    } ?: Placeholder("Nothing selected")
                 }
             }
         }

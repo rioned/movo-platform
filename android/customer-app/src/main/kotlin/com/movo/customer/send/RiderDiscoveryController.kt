@@ -5,6 +5,7 @@ import com.movo.customer.model.Coordinate
 import com.movo.customer.model.NearbyRider
 import com.movo.customer.model.toNearbyRider
 import com.movo.customer.network.CustomerApi
+import com.movo.design.MovoServiceMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -94,10 +95,21 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
         requestVersion == version && inFlightPickup == pickup
 }
 
-fun customerNearbyRiderSource(api: CustomerApi, radiusKm: Int = 10): NearbyRiderSource =
+/**
+ * Live rider availability around a pickup.
+ *
+ * `mode` narrows the scan to riders who work that product, so a passenger is never
+ * shown a rider who has turned rides off and would only have to decline them.
+ */
+fun customerNearbyRiderSource(
+    api: CustomerApi,
+    radiusKm: Int = 10,
+    mode: MovoServiceMode? = null
+): NearbyRiderSource =
     NearbyRiderSource { pickup ->
+        val modeQuery = mode?.let { "&mode=${it.apiValue}" }.orEmpty()
         val riders = api.get(
-            "/api/mobile/v1/customer/nearby-riders?lat=${pickup.latitude}&lng=${pickup.longitude}&radius_km=$radiusKm"
+            "/api/mobile/v1/customer/nearby-riders?lat=${pickup.latitude}&lng=${pickup.longitude}&radius_km=$radiusKm$modeQuery"
         )
             .dataObject()
             .optJSONArray("riders")

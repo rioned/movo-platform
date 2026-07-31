@@ -238,10 +238,15 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
         </div>
       </div>
 
-      <!-- Deliveries -->
+      <!-- Jobs: rides and deliveries -->
       <div id="page-deliveries" class="page fade-in">
         <div class="flex flex-wrap items-center gap-3 mb-4">
           <input id="del-search" class="input-field" style="width:250px" placeholder="Search orders, addresses..." oninput="loadAdminDeliveries()">
+          <select id="del-mode-filter" class="input-field" style="width:150px" onchange="loadAdminDeliveries()">
+            <option value="">All services</option>
+            <option value="ride">Rides</option>
+            <option value="delivery">Deliveries</option>
+          </select>
           <select id="del-filter" class="input-field" style="width:160px" onchange="loadAdminDeliveries()">
             <option value="">All Status</option>
             <option>created</option><option>searching</option><option>assigned</option><option>going_pickup</option>
@@ -250,8 +255,8 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
           </select>
         </div>
         <div class="card overflow-x-auto">
-          <table><thead><tr><th>Order</th><th>Customer</th><th>Rider</th><th>Type</th><th>Status</th><th>Amount</th><th>Created</th><th>Actions</th></tr></thead>
-          <tbody id="admin-del-tbody"><tr><td colspan="8" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+          <table><thead><tr><th>Order</th><th>Service</th><th>Customer</th><th>Rider</th><th>Type</th><th>Status</th><th>Amount</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody id="admin-del-tbody"><tr><td colspan="9" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
         </div>
       </div>
 
@@ -577,7 +582,10 @@ const formatDate=value=>{
 // without reading every row.
 const statusBadge=status=>{const value=String(status||'unknown').toLowerCase();const tone=SEVERE.includes(value)?'bg-red-100 text-red-700':POSITIVE.includes(value)?'bg-green-100 text-green-700':value==='medium'||value==='pending'||value==='investigating'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-700';return `<span class="status-badge ${tone}">${escapeHtml(status||'unknown')}</span>`;};
 
-async function loadAdminDeliveries() { try { const search=document.getElementById('del-search').value.trim(), status=document.getElementById('del-filter').value; const query=new URLSearchParams({limit:'100'}); if(search)query.set('search',search); if(status)query.set('status',status); const deliveries=await api(`/api/admin/deliveries?${query}`); window.adminDeliveries=Object.fromEntries(deliveries.map(delivery=>[delivery.id,delivery])); document.getElementById('admin-del-tbody').innerHTML=deliveries.length?deliveries.map(delivery=>`<tr><td class="font-mono text-xs">${escapeHtml(delivery.order_no)}</td><td>${escapeHtml(delivery.customer_name||'—')}</td><td>${escapeHtml(delivery.rider_name||'Unassigned')}</td><td>${escapeHtml(delivery.service_type)}</td><td>${statusBadge(delivery.status)}</td><td>${formatMoney(delivery.total_charge)}</td><td>${formatDate(delivery.created_at)}</td><td><button class="btn-secondary btn-sm" onclick="showDeliveryModal('${delivery.id}')">Manage</button></td></tr>`).join(''):emptyRow(8); } catch(error) { toast(error.message,true); } }
+// MOVO runs two products on one queue; the badge is how operations tells a
+// passenger trip from a parcel at a glance.
+const serviceBadge=mode=>{const isRide=String(mode||'delivery').toLowerCase()==='ride';return `<span class="status-badge ${isRide?'bg-amber-100 text-amber-700':'bg-green-100 text-green-700'}">${isRide?'Ride':'Delivery'}</span>`;};
+async function loadAdminDeliveries() { try { const search=document.getElementById('del-search').value.trim(), status=document.getElementById('del-filter').value, mode=document.getElementById('del-mode-filter').value; const query=new URLSearchParams({limit:'100'}); if(search)query.set('search',search); if(status)query.set('status',status); if(mode)query.set('service_mode',mode); const deliveries=await api(`/api/admin/deliveries?${query}`); window.adminDeliveries=Object.fromEntries(deliveries.map(delivery=>[delivery.id,delivery])); document.getElementById('admin-del-tbody').innerHTML=deliveries.length?deliveries.map(delivery=>`<tr><td class="font-mono text-xs">${escapeHtml(delivery.order_no)}</td><td>${serviceBadge(delivery.service_mode)}</td><td>${escapeHtml(delivery.customer_name||'—')}</td><td>${escapeHtml(delivery.rider_name||'Unassigned')}</td><td>${escapeHtml(delivery.service_type)}</td><td>${statusBadge(delivery.status)}</td><td>${formatMoney(delivery.total_charge)}</td><td>${formatDate(delivery.created_at)}</td><td><button class="btn-secondary btn-sm" onclick="showDeliveryModal('${delivery.id}')">Manage</button></td></tr>`).join(''):emptyRow(9); } catch(error) { toast(error.message,true); } }
 /**
  * Everything operations needs about one delivery: the facts, the audit-worthy
  * actions (status override, reassignment), and the proof the platform captured.
@@ -589,7 +597,7 @@ async function showDeliveryModal(id) {
     document.getElementById('del-modal-title').textContent = delivery.order_no;
     const closed = ['delivered','cancelled','failed'].includes(delivery.status);
     document.getElementById('del-modal-body').innerHTML = `
-      <div class="flex items-center gap-2 mb-3">${statusBadge(delivery.status)}${statusBadge(delivery.payment_status||'pending')}<span class="text-xs text-gray-500">${escapeHtml(delivery.service_type)} · ${formatDate(delivery.created_at)}</span></div>
+      <div class="flex items-center gap-2 mb-3">${serviceBadge(delivery.service_mode)}${statusBadge(delivery.status)}${statusBadge(delivery.payment_status||'pending')}<span class="text-xs text-gray-500">${escapeHtml(delivery.service_type)} · ${formatDate(delivery.created_at)}</span></div>
       <dl class="grid grid-cols-2 gap-3 text-sm mb-4">
         <div><dt class="text-gray-500">Customer</dt><dd>${escapeHtml(delivery.customer_name||'—')}</dd></div>
         <div><dt class="text-gray-500">Rider</dt><dd>${escapeHtml(delivery.rider_name||'Unassigned')}</dd></div>

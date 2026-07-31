@@ -124,10 +124,11 @@ fun TrackingScreen(
         runCatching { Duration.between(parseInstant(locationAt), serverTime?.let(::parseInstant) ?: Instant.now()).seconds > 120 }.getOrDefault(true)
     } ?: true
     val stage = MovoDeliveryStage.from(item.status)
+    val mode = item.mode
     val relationship = item.relationship?.lowercase()
     val isSender = relationship == "sender"
     val isReceiver = relationship == "receiver"
-    val cancellableByCustomer = isSender && item.status in setOf("created", "searching", "assigned")
+    val cancellableByCustomer = (isSender || mode.isRide) && item.status in setOf("created", "searching", "assigned")
 
     if (showRating) RatingDialog(deliveryId, api, onDismiss = { showRating = false }, onConfirmed = { showRating = false; actionMessage = "Rating submitted"; refreshAuthoritative() }, onError = { error = it })
     if (showSupport) SupportDialog(deliveryId, api, onDismiss = { showSupport = false }, onConfirmed = { showSupport = false; actionMessage = "Support ticket created" }, onError = { error = it })
@@ -136,9 +137,13 @@ fun TrackingScreen(
         TopAppBar(
             title = {
                 Column {
-                    Text("Order ${item.orderNo ?: item.id.take(8)}", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${serviceLabel(item.serviceType)} • ${relationship?.replaceFirstChar { it.uppercase() } ?: "Participant"}",
+                        "${if (mode.isRide) "Trip" else "Order"} ${item.orderNo ?: item.id.take(8)}",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        if (mode.isRide) serviceLabel(item.serviceType, mode)
+                        else "${serviceLabel(item.serviceType)} • ${relationship?.replaceFirstChar { it.uppercase() } ?: "Participant"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -174,11 +179,11 @@ fun TrackingScreen(
             Column(Modifier.padding(MovoSpacing.default), verticalArrangement = Arrangement.spacedBy(MovoSpacing.medium)) {
                 MovoCard {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(stage.customerLabel, style = MaterialTheme.typography.titleLarge)
+                        Text(stage.customerLabel(mode), style = MaterialTheme.typography.titleLarge)
                         StatusPill(stage.shortLabel, stage.tone)
                     }
                     Spacer(Modifier.height(MovoSpacing.medium))
-                    DeliveryProgress(stage)
+                    DeliveryProgress(stage, mode = mode)
                     Spacer(Modifier.height(MovoSpacing.default))
                     RouteCard(pickup = item.pickupAddress, destination = item.destinationAddress)
                 }
@@ -225,9 +230,11 @@ fun TrackingScreen(
                     }
                 }
 
-                if (isSender) item.pickupOtp?.let {
-                    OtpCallout("Pickup code", it, "Give this code to the rider only when handing over your item.")
+                if (isSender || mode.isRide) item.pickupOtp?.let {
+                    if (mode.isRide) OtpCallout("Boarding code", it, "Read this code to your rider before you get on.")
+                    else OtpCallout("Pickup code", it, "Give this code to the rider only when handing over your item.")
                 }
+                // Rides carry no handover code — the passenger arrives with the rider.
                 if (isReceiver && item.status == "arrived_dest") item.deliveryOtp?.let {
                     OtpCallout("Handover code", it, "Share this code with the rider once you have received your item.")
                 }
@@ -244,7 +251,7 @@ fun TrackingScreen(
                         DeliveryTimeline(
                             timeline.asReversed().map { event ->
                                 TimelineEntry(
-                                    title = event.note ?: MovoDeliveryStage.from(event.status).customerLabel,
+                                    title = event.note ?: MovoDeliveryStage.from(event.status).customerLabel(mode),
                                     subtitle = event.createdAt?.let(::formatTimestamp)
                                 )
                             }
@@ -255,19 +262,19 @@ fun TrackingScreen(
                 actionMessage?.let { MovoBanner(it, MovoTone.Positive) }
                 error?.let { MovoBanner(it, MovoTone.Critical) }
 
-                if (item.status == "awaiting_rider_selection" && isSender) {
+                if (item.status == "awaiting_rider_selection" && (isSender || mode.isRide)) {
                     MovoButton("Select another rider", onReselect)
                 }
-                if (item.status == "delivered" && isSender) {
-                    MovoButton("Rate delivery", { showRating = true })
+                if (item.status == "delivered" && (isSender || mode.isRide)) {
+                    MovoButton(if (mode.isRide) "Rate your trip" else "Rate delivery", { showRating = true })
                 }
                 if (cancellableByCustomer) {
                     MovoSecondaryButton(
-                        "Cancel delivery",
+                        if (mode.isRide) "Cancel trip" else "Cancel delivery",
                         {
                             scope.launch {
                                 runCatching { api.put("/api/deliveries/$deliveryId/cancel", JSONObject().put("reason", "Cancelled by customer")) }
-                                    .onSuccess { actionMessage = "Delivery cancelled"; refreshAuthoritative() }
+                                    .onSuccess { actionMessage = if (mode.isRide) "Trip cancelled" else "Delivery cancelled"; refreshAuthoritative() }
                                     .onFailure { error = it.message }
                             }
                         },

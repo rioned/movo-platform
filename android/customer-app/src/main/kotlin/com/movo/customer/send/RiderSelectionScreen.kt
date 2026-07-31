@@ -23,6 +23,7 @@ import com.movo.design.MovoAvatar
 import com.movo.design.MovoBanner
 import com.movo.design.MovoButton
 import com.movo.design.MovoSecondaryButton
+import com.movo.design.MovoServiceMode
 import com.movo.design.MovoShapes
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
@@ -51,7 +52,8 @@ fun RiderSelectionScreen(
     replacementIdempotencyKey: String,
     onBack: () -> Unit,
     error: String?,
-    quote: Quote? = null
+    quote: Quote? = null,
+    mode: MovoServiceMode = MovoServiceMode.Delivery
 ) {
     var selected by remember { mutableStateOf<NearbyRider?>(null) }
     val replacementStates = setOf("awaiting_rider_selection", "declined", "expired")
@@ -62,7 +64,11 @@ fun RiderSelectionScreen(
         TopAppBar(
             title = {
                 Text(
-                    if (existingDeliveryId == null) "Choose one rider" else "Choose a replacement rider",
+                    when {
+                        existingDeliveryId != null -> "Choose a replacement rider"
+                        mode.isRide -> "Choose your rider"
+                        else -> "Choose one rider"
+                    },
                     style = MaterialTheme.typography.titleLarge
                 )
             },
@@ -81,7 +87,7 @@ fun RiderSelectionScreen(
             }
             if (existingDeliveryId != null) {
                 MovoBanner(
-                    "Your delivery is kept after ${replacementStates.joinToString(" / ").replace('_', ' ')}. Pick another rider to continue.",
+                    "Your ${mode.noun} is kept after ${replacementStates.joinToString(" / ").replace('_', ' ')}. Pick another rider to continue.",
                     MovoTone.Info
                 )
             }
@@ -97,7 +103,7 @@ fun RiderSelectionScreen(
                 ) { repeat(3) { ShimmerCard() } }
 
                 riders.isEmpty() -> EmptyState(
-                    title = "No riders available now",
+                    title = if (mode.isRide) "No riders free right now" else "No riders available now",
                     message = "Rider availability changes minute by minute in Kigali. Scan again or adjust your pickup point.",
                     action = { MovoSecondaryButton("Retry", onRefreshRiders, Modifier.fillMaxWidth(0.6f)) }
                 )
@@ -122,7 +128,11 @@ fun RiderSelectionScreen(
         Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
             Column(Modifier.padding(MovoSpacing.default).navigationBarsPadding()) {
                 MovoButton(
-                    text = if (existingDeliveryId == null) "Request selected rider" else "Request replacement rider",
+                    text = when {
+                        existingDeliveryId != null -> "Request replacement rider"
+                        mode.isRide -> "Request this rider"
+                        else -> "Request selected rider"
+                    },
                     onClick = { selected?.id?.let(onSelectRider) },
                     enabled = selected != null && !submitting,
                     loading = submitting

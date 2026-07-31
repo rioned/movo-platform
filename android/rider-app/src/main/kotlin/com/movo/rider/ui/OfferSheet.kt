@@ -19,7 +19,8 @@ import com.movo.design.MovoSheet
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
 import com.movo.design.RouteCard
-import com.movo.design.StatusPill
+import com.movo.design.ServiceModeBadge
+import com.movo.design.accent
 import com.movo.design.formatDistance
 import com.movo.design.formatRwf
 import com.movo.design.serviceLabel
@@ -53,14 +54,18 @@ fun OfferSheet(
         }
     }
 
+    // A rider decides in seconds, so which product this is must be legible before
+    // the words are read — hence the badge and the mode's own accent colour.
+    val mode = offer.mode
+
     MovoSheet {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                StatusPill("New delivery offer", MovoTone.Warning)
+                ServiceModeBadge(mode, label = if (mode.isRide) "New ride offer" else "New delivery offer")
                 Spacer(Modifier.height(MovoSpacing.small))
-                Text(formatRwf(offer.earnings), style = MaterialTheme.typography.headlineMedium)
+                Text(formatRwf(offer.earnings), style = MaterialTheme.typography.headlineMedium, color = mode.accent())
                 Text(
-                    "${serviceLabel(offer.serviceType)} • ${formatDistance(offer.distanceKm)} • ${offer.orderNo}",
+                    "${serviceLabel(offer.serviceType, mode)} • ${formatDistance(offer.distanceKm)} • ${offer.orderNo}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -72,16 +77,34 @@ fun OfferSheet(
         RouteCard(
             pickup = offer.pickupAddress,
             destination = offer.destinationAddress,
-            pickupCaption = "Collect here",
-            destinationCaption = "Deliver here"
+            pickupCaption = if (mode.isRide) "Collect your passenger" else "Collect here",
+            destinationCaption = if (mode.isRide) "Drop them here" else "Deliver here"
         )
+        // What the rider needs to know before saying yes: can they carry this?
+        if (mode.isRide) {
+            Spacer(Modifier.height(MovoSpacing.small))
+            val load = buildList {
+                add(if (offer.passengerCount > 1) "${offer.passengerCount} passengers" else "1 passenger")
+                if (offer.hasLuggage) add("has a bag")
+            }.joinToString(" • ")
+            Text(load, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         offer.specialInstructions?.takeIf { it.isNotBlank() }?.let {
             Spacer(Modifier.height(MovoSpacing.small))
-            Text("Handling note: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (mode.isRide) "Passenger note: $it" else "Handling note: $it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         Spacer(Modifier.height(MovoSpacing.default))
-        MovoButton("Accept delivery", onAccept, enabled = !busy && secondsRemaining > 0, loading = busy)
+        MovoButton(
+            if (mode.isRide) "Accept ride" else "Accept delivery",
+            onAccept,
+            enabled = !busy && secondsRemaining > 0,
+            loading = busy
+        )
         Spacer(Modifier.height(MovoSpacing.small))
         MovoSecondaryButton("Decline", onDecline, enabled = !busy, tone = MaterialTheme.colorScheme.error)
     }

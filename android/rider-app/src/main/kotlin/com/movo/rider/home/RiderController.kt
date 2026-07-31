@@ -61,8 +61,31 @@ class RiderController(private val gateway: RiderGateway) {
 
     suspend fun acceptOffer(offer: DeliveryOffer) {
         runCatching { gateway.put("/api/deliveries/${offer.deliveryId}/accept") }
-            .onSuccess { post(RiderMessage.success("Delivery ${offer.orderNo} accepted")); refresh() }
+            .onSuccess {
+                val noun = if (offer.mode.isRide) "Trip" else "Delivery"
+                post(RiderMessage.success("$noun ${offer.orderNo} accepted"))
+                refresh()
+            }
             .onFailure { post(RiderMessage.error(it.message ?: "That offer is no longer available")) }
+    }
+
+    /**
+     * Changes which products this rider is offered. The server refuses to leave a
+     * rider with nothing enabled, and that refusal is surfaced rather than
+     * swallowed — a rider silently receiving no work has no way to diagnose it.
+     */
+    suspend fun setServices(acceptsRides: Boolean, acceptsDeliveries: Boolean) {
+        val body = JSONObject().put("accepts_rides", acceptsRides).put("accepts_deliveries", acceptsDeliveries)
+        runCatching { gateway.put("/api/rider/services", body) }
+            .onSuccess {
+                post(RiderMessage.success(when {
+                    acceptsRides && acceptsDeliveries -> "You will receive rides and deliveries"
+                    acceptsRides -> "You will receive ride offers only"
+                    else -> "You will receive delivery offers only"
+                }))
+                refresh()
+            }
+            .onFailure { post(RiderMessage.error(it.message ?: "Could not save your service preferences")) }
     }
 
     suspend fun declineOffer(offer: DeliveryOffer) {
@@ -76,9 +99,12 @@ class RiderController(private val gateway: RiderGateway) {
      * the two handover points, and the caller is told before the request is sent.
      */
     suspend fun advance(delivery: ActiveDelivery, otp: String, recipientName: String? = null): Boolean {
-        val action = nextRiderAction(delivery.status) ?: return false
+        val action = nextRiderAction(delivery.status, delivery.mode) ?: return false
         if (action.requiresOtp && otp.length < 4) {
-            post(RiderMessage.error("Enter the verification code from the customer"))
+            post(RiderMessage.error(
+                if (delivery.mode.isRide) "Ask your passenger for their boarding code"
+                else "Enter the verification code from the customer"
+            ))
             return false
         }
         val body = JSONObject()
@@ -91,7 +117,8 @@ class RiderController(private val gateway: RiderGateway) {
                 if (response.optBoolean("queued")) {
                     post(RiderMessage.info("Saved offline — MOVO will sync this update automatically"))
                 } else {
-                    post(RiderMessage.success(if (action.path == "complete") "Delivery completed" else "Status updated"))
+                    val done = if (delivery.mode.isRide) "Trip completed" else "Delivery completed"
+                    post(RiderMessage.success(if (action.path == "complete") done else "Status updated"))
                 }
                 refresh()
             }
