@@ -85,3 +85,31 @@ class FormattingTest {
         assertEquals("Parcel", serviceLabel(null))
     }
 }
+
+class TimestampTest {
+
+    @Test
+    fun `both platform timestamp shapes are parsed instead of shown raw`() {
+        // SQLite UTC and ISO-with-zone both used to leak to the screen unformatted.
+        for (value in listOf("2026-07-30 09:15:00", "2026-07-30T09:15:00Z", "2026-07-30T09:15:00.737Z")) {
+            val rendered = formatTimestamp(value)
+            assertFalse(rendered.contains("T"), "$value must not render as an ISO string: $rendered")
+            assertTrue(rendered.contains("09:15") || rendered.contains("11:15") || Regex("\\d{2}:\\d{2}").containsMatchIn(rendered))
+        }
+    }
+
+    @Test
+    fun `unusable timestamps degrade to the original text rather than crashing`() {
+        assertEquals("—", formatTimestamp(null))
+        assertEquals("—", formatTimestamp("  "))
+        assertEquals("not-a-date", formatTimestamp("not-a-date"))
+    }
+
+    @Test
+    fun `counts read as sentences`() {
+        assertEquals("1 delivery", plural(1, "delivery", "deliveries"))
+        assertEquals("3 deliveries", plural(3, "delivery", "deliveries"))
+        assertEquals("0 riders", plural(0, "rider"))
+        assertEquals("1 rider", plural(1, "rider"))
+    }
+}

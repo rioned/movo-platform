@@ -170,3 +170,200 @@ test('admin portal APIs support every rendered management view and mutation', as
     assert.ok(Array.isArray(await request(`/api/admin/reports?type=${type}`, { token: adminToken })));
   }
 });
+
+test('the operations portal wires every management surface it renders', () => {
+  const portal = fs.readFileSync(path.join(root, 'public/admin/index.html'), 'utf8');
+  const wired = [
+    // Pages a page-switch must be able to reach
+    /data-page="kpis"/, /data-page="incidents"/, /data-page="audit"/,
+    /id="page-kpis"/, /id="page-incidents"/, /id="page-audit"/,
+    // Endpoints each new view depends on
+    /\/api\/admin\/kpis\?days=/, /\/api\/admin\/incidents/, /\/api\/admin\/audit\?limit=/,
+    /\/api\/admin\/deliveries\/\$\{id\}\/reassign/, /\/api\/deliveries\/\$\{id\}\/pod/,
+    /\/api\/deliveries\/\$\{id\}\/receipt/, /\/api\/deliveries\/\$\{id\}\/track/,
+    /\/api\/rider\/documents\/\$\{riderId\}\/\$\{kind\}/, /\/api\/admin\/riders\/\$\{id\}/,
+    // Operational affordances
+    /function loadKpis/, /function loadIncidents/, /function loadAudit/,
+    /function showRiderModal/, /function reassignDelivery/, /function loadSystemHealth/,
+    /function loadAttention/, /renderAuthorisedImage/
+  ];
+  for (const pattern of wired) assert.match(portal, pattern, `admin portal must wire ${pattern}`);
+
+  // Protected media must travel with the admin token, never as a bare URL.
+  assert.match(portal, /headers: \{ Authorization: 'Bearer ' \+ token \}/);
+  // Every loader is reachable from the page switcher.
+  const switcher = portal.match(/const loaders=\{[^}]+\}/)[0];
+  for (const page of ['kpis', 'incidents', 'audit']) {
+    assert.match(switcher, new RegExp(page), `${page} must have a loader`);
+  }
+});
+
+test('operations can run the incident, audit, reassignment and proof workflows end to end', async () => {
+  const testDb = new Database(dbPath, { readonly: true });
+  const adminPhone = testDb.prepare("SELECT phone FROM users WHERE role='admin'").get().phone;
+  testDb.close();
+  const adminToken = (await request('/api/auth/login', { method: 'POST', body: { phone: adminPhone, password: 'Admin@2026' } })).token;
+  const customer = await register('customer', 11, { email: 'ops-customer@example.test' });
+  const rider = await register('rider', 12, { national_id: '1199980099999999', license_number: 'RDL-OPS-1', motorcycle_plate: 'RAO111A' });
+  const standby = await register('rider', 13, { national_id: '1199980088888888', license_number: 'RDL-OPS-2', motorcycle_plate: 'RAO222B' });
+
+  for (const person of [rider, standby]) {
+    await request(`/api/admin/riders/${person.user.id}/approve`, { token: adminToken, method: 'PUT', body: { action: 'approve' } });
+    await request('/api/rider/status', { token: person.token, method: 'PUT', body: { status: 'online' } });
+    await request('/api/rider/location', { token: person.token, method: 'PUT', body: { lat: -1.9441, lng: 30.0619 } });
+  }
+
+  // KPI pack backs the Performance page.
+  const kpis = await request('/api/admin/kpis?days=30', { token: adminToken });
+  for (const group of ['customers', 'deliveries', 'riders', 'financial', 'operations']) {
+    assert.ok(kpis[group], `KPI pack must include ${group}`);
+  }
+
+  // A rider raises an incident; operations sees it, then resolves it.
+  const incident = await request('/api/rider/incidents', {
+    token: rider.token, method: 'POST',
+    body: { kind: 'unsafe_item', severity: 'high', description: 'Package leaking fluid', lat: -1.9441, lng: 30.0619 }
+  });
+  const openIncidents = await request('/api/admin/incidents?status=open', { token: adminToken });
+  const listed = openIncidents.find(item => item.id === incident.id);
+  assert.ok(listed, 'the incident must appear in the operations queue');
+  assert.equal(listed.reporter_name, 'rider admin portal test');
+  await request(`/api/admin/incidents/${incident.id}`, {
+    token: adminToken, method: 'PUT', body: { status: 'resolved', resolution: 'Rider stood down, customer refunded' }
+  });
+  assert.equal((await request('/api/admin/incidents?status=open', { token: adminToken })).some(item => item.id === incident.id), false);
+
+  // A delivery is created, accepted, then handed to the standby rider by operations.
+  const delivery = (await request('/api/deliveries', {
+    token: customer.token, method: 'POST',
+    body: {
+      service_type: 'document', pickup_address: 'Kigali Heights', pickup_lat: -1.9441, pickup_lng: 30.0619,
+      pickup_name: 'Sender', pickup_phone: '+250788000011', dest_address: 'Kimironko', dest_lat: -1.9534,
+      dest_lng: 30.0585, dest_name: 'Recipient', dest_phone: '+250788000012'
+    }
+  })).delivery;
+  await request(`/api/deliveries/${delivery.id}/accept`, { token: rider.token, method: 'PUT', body: {} });
+  await request(`/api/admin/deliveries/${delivery.id}/reassign`, { token: adminToken, method: 'PUT', body: { rider_id: standby.user.id } });
+
+  // Complete the delivery so the proof and receipt views have something to show.
+  const codes = new Database(dbPath, { readonly: true });
+  const otps = codes.prepare('SELECT pickup_otp, delivery_otp FROM deliveries WHERE id=?').get(delivery.id);
+  codes.close();
+  for (const [step, body] of [['going-pickup', {}], ['arrive-pickup', {}], ['verify-pickup', { otp: otps.pickup_otp }], ['in-transit', {}], ['arrive-dest', {}]]) {
+    await request(`/api/deliveries/${delivery.id}/${step}`, { token: standby.token, method: 'PUT', body });
+  }
+  await request(`/api/deliveries/${delivery.id}/complete`, { token: standby.token, method: 'PUT', body: { otp: otps.delivery_otp, recipient_name: 'Recipient' } });
+
+  const pod = await request(`/api/deliveries/${delivery.id}/pod`, { token: adminToken });
+  assert.equal(pod.delivery.otp_verified, true);
+  assert.equal(pod.rider.plate, 'RAO222B');
+  const receipt = await request(`/api/deliveries/${delivery.id}/receipt`, { token: adminToken });
+  assert.ok(receipt.payments.length >= 3, 'settlement lines must be visible to operations');
+
+  // The rider dossier the approval decision is made from.
+  const dossier = await request(`/api/admin/riders/${standby.user.id}`, { token: adminToken });
+  assert.equal(dossier.motorcycle_plate, 'RAO222B');
+  assert.ok(Array.isArray(dossier.recentDeliveries));
+  assert.equal(dossier.recentDeliveries.some(item => item.id === delivery.id), true);
+
+  // Every one of those administrative actions is recorded.
+  const audit = await request('/api/admin/audit?limit=100', { token: adminToken });
+  assert.ok(audit.total > 0);
+  const actions = audit.entries.map(entry => entry.action);
+  for (const action of ['rider_approve', 'incident_reported', 'incident_updated', 'delivery_reassigned', 'delivery_completed']) {
+    assert.ok(actions.includes(action), `audit trail must record ${action}`);
+  }
+  const filtered = await request('/api/admin/audit?entity=incident&limit=10', { token: adminToken });
+  assert.equal(filtered.entries.every(entry => entry.entity === 'incident'), true);
+});
+
+test('operations can suspend and reinstate customer accounts with an audit trail', async () => {
+  const testDb = new Database(dbPath, { readonly: true });
+  const adminPhone = testDb.prepare("SELECT phone FROM users WHERE role='admin'").get().phone;
+  testDb.close();
+  const adminToken = (await request('/api/auth/login', { method: 'POST', body: { phone: adminPhone, password: 'Admin@2026' } })).token;
+  const customer = await register('customer', 21, { email: 'suspend-me@example.test' });
+
+  const suspended = await request(`/api/admin/users/${customer.user.id}/status`, {
+    token: adminToken, method: 'PUT', body: { status: 'suspended', reason: 'Fraudulent chargeback pattern' }
+  });
+  assert.equal(suspended.status, 'suspended');
+
+  // A suspended account cannot authenticate, and its live token stops working.
+  const blocked = await fetch(`${base}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: customer.user.phone, password: 'Passw0rd!' })
+  });
+  const blockedBody = await blocked.json();
+  assert.equal(blocked.status, 403);
+  assert.equal(blockedBody.code, 'account_suspended');
+  const withOldToken = await fetch(`${base}/api/auth/me`, { headers: { Authorization: `Bearer ${customer.token}` } });
+  assert.equal(withOldToken.status, 403, 'an issued token must stop working once the account is suspended');
+
+  // The suspension is explainable afterwards.
+  const audit = await request('/api/admin/audit?entity=user&limit=20', { token: adminToken });
+  const record = audit.entries.find(entry => entry.entity_id === customer.user.id && entry.action === 'account_suspended');
+  assert.ok(record, 'suspension must be recorded');
+  assert.match(record.details, /Fraudulent chargeback pattern/);
+
+  const reinstated = await request(`/api/admin/users/${customer.user.id}/status`, {
+    token: adminToken, method: 'PUT', body: { status: 'active' }
+  });
+  assert.equal(reinstated.status, 'active');
+  const relogin = await request('/api/auth/login', { method: 'POST', body: { phone: customer.user.phone, password: 'Passw0rd!' } });
+  assert.ok(relogin.token, 'a reinstated customer can sign in again');
+});
+
+test('suspension refuses to strand deliveries and protects administrator accounts', async () => {
+  const testDb = new Database(dbPath, { readonly: true });
+  const adminRow = testDb.prepare("SELECT id, phone FROM users WHERE role='admin'").get();
+  testDb.close();
+  const adminToken = (await request('/api/auth/login', { method: 'POST', body: { phone: adminRow.phone, password: 'Admin@2026' } })).token;
+  const customer = await register('customer', 22);
+  const rider = await register('rider', 23, { national_id: '1199980077777777', license_number: 'RDL-SUS-1', motorcycle_plate: 'RAS777S' });
+  await request(`/api/admin/riders/${rider.user.id}/approve`, { token: adminToken, method: 'PUT', body: { action: 'approve' } });
+  await request('/api/rider/status', { token: rider.token, method: 'PUT', body: { status: 'online' } });
+  await request('/api/rider/location', { token: rider.token, method: 'PUT', body: { lat: -1.9441, lng: 30.0619 } });
+  await request('/api/deliveries', {
+    token: customer.token, method: 'POST',
+    body: {
+      service_type: 'parcel', pickup_address: 'Kacyiru', pickup_lat: -1.9441, pickup_lng: 30.0619,
+      pickup_name: 'Sender', pickup_phone: '+250788000021', dest_address: 'Kicukiro', dest_lat: -1.9783,
+      dest_lng: 30.1125, dest_name: 'Recipient', dest_phone: '+250788000022'
+    }
+  });
+
+  const guarded = await fetch(`${base}/api/admin/users/${customer.user.id}/status`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ status: 'suspended', reason: 'Investigation' })
+  });
+  const guardedBody = await guarded.json();
+  assert.equal(guarded.status, 409);
+  assert.equal(guardedBody.code, 'active_deliveries');
+
+  // Operations can still override deliberately.
+  const forced = await request(`/api/admin/users/${customer.user.id}/status`, {
+    token: adminToken, method: 'PUT', body: { status: 'suspended', reason: 'Investigation', force: true }
+  });
+  assert.equal(forced.status, 'suspended');
+
+  // Administrators are not suspendable from the portal.
+  const protectedAdmin = await fetch(`${base}/api/admin/users/${adminRow.id}/status`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ status: 'suspended', reason: 'oops' })
+  });
+  assert.equal(protectedAdmin.status, 409);
+  assert.equal((await protectedAdmin.json()).code, 'forbidden_target');
+});
+
+test('the portal exposes account suspension and richer rider facts', () => {
+  const portal = fs.readFileSync(path.join(root, 'public/admin/index.html'), 'utf8');
+  assert.match(portal, /function setAccountStatus/);
+  assert.match(portal, /\/api\/admin\/users\/\$\{id\}\/status/);
+  assert.match(portal, /Reinstate/);
+  assert.match(portal, /motorcycle_plate\|\|'Not provided'/);
+  assert.match(portal, /rider\.availability\|\|rider\.online_status/);
+  // Login must be a real form so Enter submits and password managers work.
+  assert.match(portal, /<form class="space-y-3" onsubmit="event\.preventDefault\(\);handleLogin\(\)"/);
+  assert.match(portal, /rel="icon"/);
+});

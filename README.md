@@ -15,7 +15,7 @@
 **Platform**
 
 - Phone-first registration and login for customers, riders, and businesses, with OTP verification, password policy, account lockout and audit logging
-- Admin portal for operational oversight, rider approval, pricing, zones, support, incidents, audit trail, KPIs and reports
+- Admin portal for operational oversight: an attention queue and platform-health check on the dashboard, the KPI pack, live map, delivery management with reassignment, proof of delivery and receipts, a rider dossier with document verification, rider incidents and SOS handling, account suspension, pricing, zones, support and a paginated audit trail
 - Parcel and document delivery requests, including scheduled and bulk business uploads
 - Zone-based pricing, platform fees, cancellation fees and delivery estimates
 - Delivery lifecycle from request through dispatch, verified pickup, tracking, verified handover, settlement and rating
@@ -250,7 +250,11 @@ All JSON endpoints are served under `/api`. Authenticated routes expect the JWT 
 - Rider profile, documents, availability (`online`, `busy`, `unavailable`, `offline`), location, earnings, performance, offers, incidents/SOS, and active-delivery endpoints are under `/api/rider/*` and `/api/mobile/v1/rider/*`.
 - Business profile, dashboard, members, invoices and bulk delivery upload (`POST /api/business/deliveries/bulk`) are under `/api/business/*`.
 - Ratings and support tickets are under `/api/ratings` and `/api/tickets`.
-- Admin operations are under `/api/admin/*`, including rider approval, delivery oversight and reassignment, zone/pricing configuration, finances, live map, reports, incidents, the audit trail (`/api/admin/audit`) and the KPI pack (`/api/admin/kpis`).
+- Admin operations are under `/api/admin/*`, including rider approval, delivery oversight and reassignment, account suspension (`PUT /api/admin/users/:id/status`), zone/pricing configuration, finances, live map, reports, incidents, the audit trail (`/api/admin/audit`) and the KPI pack (`/api/admin/kpis`).
+
+Suspension refuses to strand deliveries that are in flight unless the caller passes
+`force`, never applies to administrator accounts, invalidates the account's existing
+tokens, and records the reason in the audit trail.
 
 Errors carry a stable machine-readable `code` alongside the human message, so clients can
 localise their own copy:

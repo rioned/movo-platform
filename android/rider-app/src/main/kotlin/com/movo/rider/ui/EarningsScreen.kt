@@ -19,6 +19,8 @@ import com.movo.design.SegmentedChoice
 import com.movo.design.ShimmerCard
 import com.movo.design.StatTile
 import com.movo.design.formatRwf
+import com.movo.design.formatTimestamp
+import com.movo.design.plural
 import com.movo.rider.model.EarningsSummary
 import com.movo.rider.model.PerformanceStats
 
@@ -63,7 +65,7 @@ fun EarningsScreen(
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Text(
-                "${summary?.count ?: 0} completed deliveries • ${formatRwf(summary?.platformFees ?: 0.0)} platform fees",
+                "${plural(summary?.count ?: 0, "completed delivery", "completed deliveries")} • ${formatRwf(summary?.platformFees ?: 0.0)} platform fees",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
@@ -106,7 +108,7 @@ fun EarningsScreen(
                                     maxLines = 2
                                 )
                                 entry.completedAt?.let {
-                                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(formatTimestamp(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                             Text(formatRwf(entry.amount), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)

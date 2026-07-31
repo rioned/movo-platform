@@ -75,6 +75,38 @@ fun formatDistance(km: Double?): String {
     return if (km < 1) "${kotlin.math.round(km * 1000).toInt()} m" else String.format("%.1f km", km)
 }
 
+/**
+ * Renders a platform timestamp in the device's local time.
+ *
+ * The API returns two shapes — SQLite UTC ("2026-07-31 06:08:59", no zone) and ISO
+ * strings that already carry one — and a rider should never be shown either raw.
+ */
+fun formatTimestamp(value: String?): String {
+    val raw = value?.trim().orEmpty()
+    if (raw.isEmpty()) return "—"
+    val instant = runCatching {
+        val normalised = raw.replace(' ', 'T')
+        if (normalised.endsWith("Z") || Regex("[+-]\\d{2}:?\\d{2}$").containsMatchIn(normalised)) {
+            java.time.Instant.parse(normalised.replace(Regex("([+-]\\d{2}):?(\\d{2})$"), "$1:$2"))
+        } else {
+            java.time.LocalDateTime.parse(normalised).toInstant(java.time.ZoneOffset.UTC)
+        }
+    }.getOrNull() ?: return raw
+
+    val local = java.time.ZonedDateTime.ofInstant(instant, java.time.ZoneId.systemDefault())
+    val today = java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault()).toLocalDate()
+    val time = java.time.format.DateTimeFormatter.ofPattern("HH:mm").format(local)
+    return when (local.toLocalDate()) {
+        today -> "Today $time"
+        today.minusDays(1) -> "Yesterday $time"
+        else -> java.time.format.DateTimeFormatter.ofPattern("d MMM, HH:mm").format(local)
+    }
+}
+
+/** "1 delivery" / "3 deliveries" — counts read as sentences, not as data. */
+fun plural(count: Int, singular: String, plural: String = "${singular}s"): String =
+    "$count ${if (count == 1) singular else plural}"
+
 fun formatMinutes(minutes: Number?): String {
     val total = minutes?.toInt() ?: return "—"
     if (total < 60) return "$total min"

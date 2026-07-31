@@ -1719,7 +1719,9 @@ app.get('/api/admin/users', auth, roleAuth('admin'), route((req, res) => {
   const { role, status, search } = req.query;
   const { limit, offset } = validate.pagination(req.query, { defaultLimit: 20, maxLimit: 100 });
   let query = 'SELECT u.id,u.phone,u.email,u.full_name,u.role,u.status,u.created_at';
-  if (role === 'rider') query += ',r.approval_status,r.online_status,r.avg_rating,r.total_deliveries,r.total_earnings';
+  // The rider list is the approval and dispatch queue: it must carry the vehicle
+  // and availability facts operations decides on, not just the counters.
+  if (role === 'rider') query += ',r.approval_status,r.online_status,r.availability,r.avg_rating,r.rating_count,r.total_deliveries,r.total_earnings,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.last_location_update';
   if (role === 'business') query += ',b.company_name,b.tax_id,b.approval_status as biz_status';
   query += ' FROM users u';
   if (role === 'rider') query += ' LEFT JOIN riders r ON u.id=r.user_id';
@@ -1732,6 +1734,37 @@ app.get('/api/admin/users', auth, roleAuth('admin'), route((req, res) => {
   query += ' ORDER BY u.created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
   resOK(res, db.prepare(query).all(...params));
+}));
+
+/**
+ * Account suspension and reinstatement (spec §9.4). Riders keep their dedicated
+ * approval workflow; this covers customers, businesses and staff accounts that
+ * operations must be able to stop immediately — for fraud, abuse or a dispute.
+ */
+app.put('/api/admin/users/:id/status', auth, roleAuth('admin'), route((req, res) => {
+  const status = validate.oneOf(req.body.status, ['active', 'suspended'], 'status');
+  const reason = validate.optionalString(req.body.reason, 'reason', { max: 500 });
+  const user = db.prepare('SELECT id,role,status,full_name FROM users WHERE id=?').get(req.params.id);
+  if (!user) return resErr(res, 'Account not found', 404, 'account_not_found');
+  if (user.role === 'admin') return resErr(res, 'Administrator accounts cannot be suspended from the portal', 409, 'forbidden_target');
+  if (user.status === status) return resErr(res, `Account is already ${status}`, 409, 'invalid_state');
+
+  const active = db.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE (customer_id=? OR business_id=?) AND status NOT IN ('delivered','cancelled','failed')").get(user.id, user.id).c;
+  if (status === 'suspended' && active > 0 && !req.body.force) {
+    return resErr(res, `This account has ${active} delivery/deliveries in flight. Resolve them first or resend with force.`, 409, 'active_deliveries');
+  }
+
+  db.prepare("UPDATE users SET status=?,updated_at=datetime('now') WHERE id=?").run(status, user.id);
+  if (status === 'suspended' && user.role === 'rider') {
+    db.prepare("UPDATE riders SET online_status='offline',availability='offline' WHERE user_id=?").run(user.id);
+  }
+  audit(req.user.id, status === 'suspended' ? 'account_suspended' : 'account_reinstated', 'user', user.id, { role: user.role, reason });
+  notifyUser(user.id, 'account_status', status === 'suspended' ? 'Account suspended' : 'Account reinstated',
+    status === 'suspended'
+      ? `Your MOVO account has been suspended.${reason ? ` Reason: ${reason}` : ''} Contact support to appeal.`
+      : 'Your MOVO account is active again. Welcome back.');
+  logger.warn('account_status_changed', { targetId: user.id, role: user.role, status, by: req.user.id });
+  resOK(res, { id: user.id, status, message: `Account ${status}` });
 }));
 
 app.get('/api/admin/riders/:id', auth, roleAuth('admin'), (req, res) => {

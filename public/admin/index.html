@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MOVO Admin</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A6847'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='bold' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -51,11 +52,12 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
 <div id="view-auth" class="view active" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#0A6847 0%,#042c1c 100%)">
   <div class="bg-white rounded-2xl p-8 shadow-xl fade-in" style="width:360px">
     <div class="text-center mb-6"><h1 class="text-3xl font-bold font-display text-movo-500">MOVO</h1><p class="text-gray-500 text-sm">Administration Portal</p></div>
-    <div class="space-y-3">
-      <input id="login-phone" class="input-field" placeholder="Admin phone" value="+250780000000">
-      <input id="login-password" class="input-field" type="password" placeholder="Password" value="Admin@2026">
-      <button onclick="handleLogin()" class="btn-primary w-full py-3">Sign In</button>
-    </div>
+    <!-- A real form: password managers work and Enter submits, as operators expect -->
+    <form class="space-y-3" onsubmit="event.preventDefault();handleLogin()">
+      <input id="login-phone" class="input-field" placeholder="Admin phone" autocomplete="username" value="+250780000000">
+      <input id="login-password" class="input-field" type="password" placeholder="Password" autocomplete="current-password" value="Admin@2026">
+      <button type="submit" class="btn-primary w-full py-3">Sign In</button>
+    </form>
   </div>
 </div>
 
@@ -69,15 +71,18 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
     </div>
     <div class="p-2 space-y-0.5 mt-2">
       <button class="nav-btn active" data-page="dashboard" onclick="showPage('dashboard')"><i class="fas fa-chart-pie"></i><span class="nav-label">Dashboard</span></button>
+      <button class="nav-btn" data-page="kpis" onclick="showPage('kpis')"><i class="fas fa-gauge-high"></i><span class="nav-label">Performance</span></button>
       <button class="nav-btn" data-page="live-map" onclick="showPage('live-map')"><i class="fas fa-map-marked-alt"></i><span class="nav-label">Live Map</span></button>
       <button class="nav-btn" data-page="deliveries" onclick="showPage('deliveries')"><i class="fas fa-box"></i><span class="nav-label">Deliveries</span></button>
       <button class="nav-btn" data-page="riders" onclick="showPage('riders')"><i class="fas fa-motorcycle"></i><span class="nav-label">Riders</span></button>
+      <button class="nav-btn" data-page="incidents" onclick="showPage('incidents')"><i class="fas fa-triangle-exclamation"></i><span class="nav-label">Incidents</span><span id="nav-incident-badge" class="hidden ml-auto text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-600">0</span></button>
       <button class="nav-btn" data-page="customers" onclick="showPage('customers')"><i class="fas fa-users"></i><span class="nav-label">Customers</span></button>
       <button class="nav-btn" data-page="businesses" onclick="showPage('businesses')"><i class="fas fa-building"></i><span class="nav-label">Businesses</span></button>
       <button class="nav-btn" data-page="zones" onclick="showPage('zones')"><i class="fas fa-map"></i><span class="nav-label">Zones</span></button>
       <button class="nav-btn" data-page="pricing" onclick="showPage('pricing')"><i class="fas fa-tags"></i><span class="nav-label">Pricing</span></button>
       <button class="nav-btn" data-page="finances" onclick="showPage('finances')"><i class="fas fa-coins"></i><span class="nav-label">Finances</span></button>
       <button class="nav-btn" data-page="tickets" onclick="showPage('tickets')"><i class="fas fa-headset"></i><span class="nav-label">Support</span></button>
+      <button class="nav-btn" data-page="audit" onclick="showPage('audit')"><i class="fas fa-clipboard-list"></i><span class="nav-label">Audit trail</span></button>
     </div>
     <div class="sidebar-footer absolute bottom-0 left-0 right-0 p-3 border-t border-gray-100">
       <button onclick="handleLogout()" class="nav-btn text-red-500 hover:bg-red-50"><i class="fas fa-sign-out-alt"></i><span class="nav-label">Logout</span></button>
@@ -99,6 +104,16 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
     <div class="p-6">
       <!-- Dashboard -->
       <div id="page-dashboard" class="page active fade-in">
+        <!-- Work that needs a human decision right now, ahead of any vanity metric -->
+        <div id="attention-strip" class="hidden mb-6">
+          <div class="card" style="border-left:4px solid #F2B705">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-bold font-display text-gray-900"><i class="fas fa-bell text-gold-500 mr-2"></i>Needs attention</h3>
+              <button onclick="loadDashboard()" class="btn-secondary btn-sm"><i class="fas fa-rotate mr-1"></i>Refresh</button>
+            </div>
+            <div id="attention-items" class="flex flex-wrap gap-2"></div>
+          </div>
+        </div>
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div class="kpi-card"><p class="text-xs text-gray-500 uppercase tracking-wide">Active Deliveries</p><p class="text-3xl font-bold font-display text-movo-500 mt-1" id="kpi-active">0</p></div>
           <div class="kpi-card" style="border-left-color:#F2B705"><p class="text-xs text-gray-500 uppercase tracking-wide">Today Completed</p><p class="text-3xl font-bold font-display text-gold-500 mt-1" id="kpi-today">0</p></div>
@@ -122,8 +137,85 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
               <button onclick="showPage('riders')" class="btn-secondary btn-sm text-left"><i class="fas fa-user-check mr-2"></i>Approve Riders</button>
               <button onclick="showPage('deliveries')" class="btn-secondary btn-sm text-left"><i class="fas fa-search mr-2"></i>Monitor Deliveries</button>
               <button onclick="showPage('live-map')" class="btn-secondary btn-sm text-left"><i class="fas fa-map mr-2"></i>Live Map</button>
+              <button onclick="showPage('incidents')" class="btn-secondary btn-sm text-left"><i class="fas fa-triangle-exclamation mr-2"></i>Rider Incidents</button>
               <button onclick="showPage('tickets')" class="btn-secondary btn-sm text-left"><i class="fas fa-headset mr-2"></i>Support Queue</button>
+              <button onclick="showPage('audit')" class="btn-secondary btn-sm text-left"><i class="fas fa-clipboard-list mr-2"></i>Audit Trail</button>
             </div>
+          </div>
+        </div>
+
+        <!-- Platform health, so operations sees an outage before customers report it -->
+        <div class="card mt-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold font-display text-gray-900">Platform health</h3>
+            <button onclick="loadSystemHealth()" class="btn-secondary btn-sm"><i class="fas fa-heart-pulse mr-1"></i>Check now</button>
+          </div>
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm" id="health-grid">
+            <div><p class="text-xs text-gray-500">Service</p><p class="font-bold" id="health-status">—</p></div>
+            <div><p class="text-xs text-gray-500">Readiness</p><p class="font-bold" id="health-ready">—</p></div>
+            <div><p class="text-xs text-gray-500">Version</p><p class="font-bold" id="health-version">—</p></div>
+            <div><p class="text-xs text-gray-500">Uptime</p><p class="font-bold" id="health-uptime">—</p></div>
+          </div>
+          <p id="health-failures" class="text-xs text-red-500 mt-2 hidden"></p>
+        </div>
+      </div>
+
+      <!-- Performance / KPI pack -->
+      <div id="page-kpis" class="page fade-in">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div><h2 class="font-bold text-gray-900">Platform KPIs</h2><p class="text-xs text-gray-500">Customer, delivery, rider, financial and operational indicators.</p></div>
+          <div class="flex items-center gap-2">
+            <select id="kpi-window" class="input-field" style="width:150px" onchange="loadKpis()">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="365">Last 12 months</option>
+            </select>
+            <button onclick="loadKpis()" class="btn-secondary btn-sm"><i class="fas fa-rotate mr-1"></i>Refresh</button>
+          </div>
+        </div>
+        <div id="kpi-groups" class="grid lg:grid-cols-2 gap-4"></div>
+      </div>
+
+      <!-- Incidents -->
+      <div id="page-incidents" class="page fade-in">
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+          <select id="incident-filter" class="input-field" style="width:180px" onchange="loadIncidents()">
+            <option value="open">Open</option>
+            <option value="investigating">Investigating</option>
+            <option value="resolved">Resolved</option>
+            <option value="">All incidents</option>
+          </select>
+          <button onclick="loadIncidents()" class="btn-secondary btn-sm"><i class="fas fa-rotate mr-1"></i>Refresh</button>
+          <p class="text-xs text-gray-500">Rider SOS and safety reports are ordered by severity.</p>
+        </div>
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>Severity</th><th>Type</th><th>Rider</th><th>Delivery</th><th>Reported</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="incident-tbody"><tr><td colspan="7" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+        </div>
+      </div>
+
+      <!-- Audit trail -->
+      <div id="page-audit" class="page fade-in">
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+          <select id="audit-entity" class="input-field" style="width:180px" onchange="loadAudit(1)">
+            <option value="">All entities</option>
+            <option value="delivery">Delivery</option>
+            <option value="rider">Rider</option>
+            <option value="user">User</option>
+            <option value="incident">Incident</option>
+            <option value="business">Business</option>
+          </select>
+          <button onclick="loadAudit(1)" class="btn-secondary btn-sm"><i class="fas fa-rotate mr-1"></i>Refresh</button>
+          <span class="text-xs text-gray-500" id="audit-total"></span>
+        </div>
+        <div class="card overflow-x-auto">
+          <table><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead>
+          <tbody id="audit-tbody"><tr><td colspan="5" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+          <div class="flex items-center justify-between mt-3">
+            <button id="audit-prev" onclick="loadAudit(auditPage-1)" class="btn-secondary btn-sm">Previous</button>
+            <span class="text-xs text-gray-500" id="audit-page-label">Page 1</span>
+            <button id="audit-next" onclick="loadAudit(auditPage+1)" class="btn-secondary btn-sm">Next</button>
           </div>
         </div>
       </div>
@@ -172,24 +264,24 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
           </select>
         </div>
         <div class="card overflow-x-auto">
-          <table><thead><tr><th>Name</th><th>Phone</th><th>Plate</th><th>Rating</th><th>Deliveries</th><th>Earnings</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody id="rider-tbody"><tr><td colspan="8" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+          <table><thead><tr><th>Name</th><th>Phone</th><th>Motorcycle</th><th>Availability</th><th>Rating</th><th>Deliveries</th><th>Earnings</th><th>Verification</th><th>Actions</th></tr></thead>
+          <tbody id="rider-tbody"><tr><td colspan="9" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
         </div>
       </div>
 
       <!-- Customers -->
       <div id="page-customers" class="page fade-in">
         <div class="card overflow-x-auto">
-          <table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Status</th><th>Joined</th></tr></thead>
-          <tbody id="customer-tbody"><tr><td colspan="5" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+          <table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+          <tbody id="customer-tbody"><tr><td colspan="6" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
         </div>
       </div>
 
       <!-- Businesses -->
       <div id="page-businesses" class="page fade-in">
         <div class="card overflow-x-auto">
-          <table><thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>TIN</th><th>Status</th><th>Joined</th></tr></thead>
-          <tbody id="biz-tbody"><tr><td colspan="6" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
+          <table><thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>TIN</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+          <tbody id="biz-tbody"><tr><td colspan="7" class="text-center text-gray-400 py-6">Loading...</td></tr></tbody></table>
         </div>
       </div>
 
@@ -278,6 +370,34 @@ body.dark{background:#0d1513;color:#e7f0eb}body.dark .sidebar,body.dark .card,bo
   </div>
 </div>
 
+<!-- Rider Detail Modal -->
+<div id="rider-modal" class="modal-overlay" style="display:none">
+  <div class="modal-content" style="max-width:680px">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-bold font-display text-gray-900" id="rider-modal-title">Rider</h3>
+      <button onclick="document.getElementById('rider-modal').style.display='none'" class="text-gray-400 hover:text-gray-600" aria-label="Close rider details"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="rider-modal-body"></div>
+  </div>
+</div>
+
+<!-- Incident Modal -->
+<div id="incident-modal" class="modal-overlay" style="display:none">
+  <div class="modal-content" style="max-width:560px">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-bold font-display text-gray-900" id="incident-modal-title">Incident</h3>
+      <button onclick="document.getElementById('incident-modal').style.display='none'" class="text-gray-400 hover:text-gray-600" aria-label="Close incident"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="incident-modal-body" class="mb-3"></div>
+    <label class="text-sm font-medium">Resolution notes</label>
+    <textarea id="incident-resolution" class="input-field mt-1" rows="3" placeholder="What did operations do about this?"></textarea>
+    <div class="flex gap-2 mt-3">
+      <button onclick="updateIncident('investigating')" class="btn-secondary">Mark investigating</button>
+      <button onclick="updateIncident('resolved')" class="btn-primary">Resolve</button>
+    </div>
+  </div>
+</div>
+
 <!-- Ticket Modal -->
 <div id="ticket-modal" class="modal-overlay" style="display:none">
   <div class="modal-content">
@@ -300,26 +420,363 @@ async function handleLogin() { try { const data=await api('/api/auth/login',{met
 function handleLogout() { token=null; localStorage.removeItem('admin_token'); document.getElementById('view-app').classList.remove('active'); const auth=document.getElementById('view-auth'); auth.classList.add('active'); auth.style.display='flex'; }
 function enterApp() { document.getElementById('view-auth').style.display='none'; document.getElementById('view-app').classList.add('active'); loadDashboard(); }
 function formatMoney(value) { return Number(value||0).toLocaleString()+' FRW'; }
-async function loadDashboard() { try { const data=await api('/api/admin/dashboard'); const values={'kpi-active':data.active,'kpi-today':data.todayCompleted,'kpi-riders':data.onlineRiders,'kpi-revenue':formatMoney(data.todayRevenue),'kpi-customers':data.totalCustomers,'kpi-total-riders':data.totalRiders,'kpi-pending':data.pendingApprovals,'kpi-tickets':data.openTickets,'kpi-month-del':data.monthDeliveries,'kpi-month-rev':formatMoney(data.monthRevenue),'kpi-businesses':data.totalBusinesses}; Object.entries(values).forEach(([id,value])=>{const el=document.getElementById(id);if(el)el.textContent=value??0;}); } catch(error) { toast(error.message,true); } }
-function showPage(name) { document.querySelectorAll('.page').forEach(page=>page.classList.remove('active')); document.getElementById('page-'+name)?.classList.add('active'); document.querySelectorAll('.nav-btn[data-page]').forEach(button=>button.classList.toggle('active',button.dataset.page===name)); const titles={dashboard:'Dashboard','live-map':'Live Operations Map',deliveries:'Delivery Management',riders:'Rider Management',customers:'Customer Management',businesses:'Business Accounts',zones:'Delivery Zones',pricing:'Pricing Configuration',finances:'Financial Overview',tickets:'Support Tickets'}; document.getElementById('page-title').textContent=titles[name]||name; clearInterval(mapRefreshTimer); if(name==='live-map')mapRefreshTimer=setInterval(loadLiveMap,15000); const loaders={dashboard:loadDashboard,'live-map':loadLiveMap,deliveries:loadAdminDeliveries,riders:loadRiders,customers:loadCustomers,businesses:loadBusinesses,zones:loadZones,pricing:loadPricing,finances:loadFinances,tickets:loadTickets}; loaders[name]?.(); }
+async function loadDashboard() { try { const data=await api('/api/admin/dashboard'); const values={'kpi-active':data.active,'kpi-today':data.todayCompleted,'kpi-riders':data.onlineRiders,'kpi-revenue':formatMoney(data.todayRevenue),'kpi-customers':data.totalCustomers,'kpi-total-riders':data.totalRiders,'kpi-pending':data.pendingApprovals,'kpi-tickets':data.openTickets,'kpi-month-del':data.monthDeliveries,'kpi-month-rev':formatMoney(data.monthRevenue),'kpi-businesses':data.totalBusinesses}; Object.entries(values).forEach(([id,value])=>{const el=document.getElementById(id);if(el)el.textContent=value??0;}); loadAttention(data); loadSystemHealth(); } catch(error) { toast(error.message,true); } }
+
+// Surfaces the queues a human has to clear, each one a link to the work itself.
+async function loadAttention(dashboard) {
+  const openIncidents = await api('/api/admin/incidents?status=open&limit=50').catch(()=>[]);
+  const critical = openIncidents.filter(incident=>incident.severity==='critical'||incident.severity==='high').length;
+  const badge = document.getElementById('nav-incident-badge');
+  if (badge) { badge.textContent = openIncidents.length; badge.classList.toggle('hidden', openIncidents.length === 0); }
+  const items = [
+    { count: dashboard.pendingApprovals, one: 'rider awaiting approval', many: 'riders awaiting approval', page: 'riders', tone: 'bg-orange-100 text-orange-700' },
+    { count: critical, one: 'urgent rider incident', many: 'urgent rider incidents', page: 'incidents', tone: 'bg-red-100 text-red-700' },
+    { count: openIncidents.length - critical, one: 'other open incident', many: 'other open incidents', page: 'incidents', tone: 'bg-yellow-100 text-yellow-700' },
+    { count: dashboard.openTickets, one: 'open support ticket', many: 'open support tickets', page: 'tickets', tone: 'bg-blue-100 text-blue-700' }
+  ].filter(item => Number(item.count) > 0);
+  document.getElementById('attention-strip').classList.toggle('hidden', items.length === 0);
+  document.getElementById('attention-items').innerHTML = items.map(item =>
+    `<button onclick="showPage('${item.page}')" class="${item.tone} px-3 py-2 rounded-lg text-sm font-semibold">${item.count} ${escapeHtml(Number(item.count) === 1 ? item.one : item.many)}</button>`
+  ).join('');
+}
+
+async function loadSystemHealth() {
+  const set=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=value;};
+  try {
+    const health = await fetch(API+'/health').then(response=>response.json());
+    set('health-status', health.status==='ok'?'Operational':'Degraded');
+    set('health-version', health.version||'—');
+    const uptime = Number(health.uptimeSeconds||0);
+    set('health-uptime', uptime>3600?`${Math.floor(uptime/3600)}h ${Math.floor((uptime%3600)/60)}m`:`${Math.floor(uptime/60)}m`);
+  } catch { set('health-status','Unreachable'); }
+  try {
+    const ready = await fetch(API+'/ready').then(response=>response.json());
+    set('health-ready', ready.status==='ready'?'Ready':'Not ready');
+    const failures=document.getElementById('health-failures');
+    failures.textContent=(ready.failures||[]).join(' · ');
+    failures.classList.toggle('hidden',!(ready.failures||[]).length);
+  } catch { set('health-ready','Unknown'); }
+}
+
+/** KPI pack (spec §22) rendered as one card per stakeholder group. */
+async function loadKpis() {
+  try {
+    const days = document.getElementById('kpi-window').value;
+    const kpis = await api(`/api/admin/kpis?days=${days}`);
+    const groups = [
+      { title: 'Customers', icon: 'fa-users', rows: [
+        ['Registered customers', kpis.customers.registered],
+        ['Active in period', kpis.customers.active],
+        ['Repeat customer rate', `${kpis.customers.repeat_rate}%`]
+      ]},
+      { title: 'Deliveries', icon: 'fa-box', rows: [
+        ['Requested', kpis.deliveries.requested],
+        ['Completed', kpis.deliveries.completed],
+        ['Completion rate', `${kpis.deliveries.completion_rate}%`],
+        ['Cancellation rate', `${kpis.deliveries.cancellation_rate}%`],
+        ['Failed rate', `${kpis.deliveries.failure_rate}%`],
+        ['Average pickup time', `${kpis.deliveries.avg_pickup_minutes} min`],
+        ['Average delivery time', `${kpis.deliveries.avg_delivery_minutes} min`]
+      ]},
+      { title: 'Riders', icon: 'fa-motorcycle', rows: [
+        ['Approved riders', kpis.riders.approved],
+        ['Online now', kpis.riders.online],
+        ['Acceptance rate', `${kpis.riders.acceptance_rate}%`],
+        ['Deliveries per rider', kpis.riders.deliveries_per_rider],
+        ['Average rating', kpis.riders.avg_rating]
+      ]},
+      { title: 'Financial', icon: 'fa-coins', rows: [
+        ['Gross delivery value', formatMoney(kpis.financial.gross_delivery_value)],
+        ['Platform revenue', formatMoney(kpis.financial.platform_revenue)],
+        ['Rider payouts', formatMoney(kpis.financial.rider_payouts)],
+        ['Average platform fee', formatMoney(kpis.financial.avg_platform_fee)],
+        ['Revenue per active customer', formatMoney(kpis.financial.revenue_per_active_customer)]
+      ]},
+      { title: 'Operations', icon: 'fa-headset', rows: [
+        ['Support tickets', kpis.operations.tickets],
+        ['Open tickets', kpis.operations.open_tickets],
+        ['Incidents reported', kpis.operations.incidents],
+        ['Average resolution', `${kpis.operations.avg_resolution_hours} h`],
+        ['API uptime', `${Math.floor(kpis.operations.uptime_seconds/60)} min`]
+      ]}
+    ];
+    document.getElementById('kpi-groups').innerHTML = groups.map(group=>`<article class="card"><h3 class="font-bold font-display text-gray-900 mb-3"><i class="fas ${group.icon} text-movo-500 mr-2"></i>${group.title}</h3><dl class="space-y-2">${group.rows.map(([label,value])=>`<div class="flex justify-between text-sm"><dt class="text-gray-500">${escapeHtml(label)}</dt><dd class="font-bold">${escapeHtml(String(value))}</dd></div>`).join('')}</dl></article>`).join('');
+  } catch(error) { toast(error.message,true); }
+}
+
+async function loadIncidents() {
+  try {
+    const status = document.getElementById('incident-filter').value;
+    const incidents = await api(`/api/admin/incidents?limit=100${status?`&status=${status}`:''}`);
+    window.adminIncidents = Object.fromEntries(incidents.map(incident=>[incident.id,incident]));
+    document.getElementById('incident-tbody').innerHTML = incidents.length ? incidents.map(incident=>`<tr><td>${statusBadge(incident.severity)}</td><td>${escapeHtml(incident.kind.replace(/_/g,' '))}</td><td>${escapeHtml(incident.reporter_name||'—')}<span class="block text-xs text-gray-400">${escapeHtml(incident.reporter_phone||'')}</span></td><td class="font-mono text-xs">${escapeHtml(incident.order_no||'—')}</td><td>${formatDate(incident.created_at)}</td><td>${statusBadge(incident.status)}</td><td>${incident.status==='resolved'?'—':`<button class="btn-primary btn-sm" onclick="showIncidentModal('${incident.id}')">Handle</button>`}</td></tr>`).join('') : emptyRow(7,'No incidents in this view');
+  } catch(error) { toast(error.message,true); }
+}
+
+function showIncidentModal(id) {
+  const incident = window.adminIncidents?.[id];
+  if (!incident) return toast('Incident not found', true);
+  selectedIncidentId = id;
+  document.getElementById('incident-modal-title').textContent = `${incident.kind.replace(/_/g,' ')} · ${incident.severity}`;
+  const coordinates = Number.isFinite(Number(incident.lat)) && Number.isFinite(Number(incident.lng))
+    ? `<div><dt class="text-gray-500">Reported at</dt><dd><button class="text-movo-500 underline" onclick="document.getElementById('incident-modal').style.display='none';showPage('live-map');focusMapPoint(${Number(incident.lat)},${Number(incident.lng)})">${Number(incident.lat).toFixed(5)}, ${Number(incident.lng).toFixed(5)}</button></dd></div>` : '';
+  document.getElementById('incident-modal-body').innerHTML = `<dl class="grid grid-cols-2 gap-3 text-sm"><div><dt class="text-gray-500">Rider</dt><dd>${escapeHtml(incident.reporter_name||'—')}</dd></div><div><dt class="text-gray-500">Phone</dt><dd>${escapeHtml(incident.reporter_phone||'—')}</dd></div><div><dt class="text-gray-500">Delivery</dt><dd>${escapeHtml(incident.order_no||'Not linked')}</dd></div><div><dt class="text-gray-500">Reported</dt><dd>${formatDate(incident.created_at)}</dd></div>${coordinates}</dl><p class="text-sm mt-3">${escapeHtml(incident.description||'No description provided.')}</p>`;
+  document.getElementById('incident-resolution').value = incident.resolution || '';
+  document.getElementById('incident-modal').style.display = 'flex';
+}
+
+async function updateIncident(status) {
+  try {
+    await api(`/api/admin/incidents/${selectedIncidentId}`,{method:'PUT',body:JSON.stringify({status,resolution:document.getElementById('incident-resolution').value.trim()||undefined})});
+    document.getElementById('incident-modal').style.display='none';
+    toast(`Incident ${status}`);
+    loadIncidents(); loadDashboard();
+  } catch(error) { toast(error.message,true); }
+}
+
+/** Administrative changes are queryable so any manual action can be explained later. */
+async function loadAudit(page=1) {
+  auditPage = Math.max(1, page);
+  try {
+    const entity = document.getElementById('audit-entity').value;
+    const { entries, total } = await api(`/api/admin/audit?limit=${AUDIT_PAGE_SIZE}&page=${auditPage}${entity?`&entity=${entity}`:''}`);
+    document.getElementById('audit-tbody').innerHTML = entries.length ? entries.map(entry=>{
+      let details = entry.details || '';
+      try { details = entry.details ? Object.entries(JSON.parse(entry.details)).map(([key,value])=>`${key}: ${value}`).join(', ') : ''; } catch {}
+      return `<tr><td class="whitespace-nowrap">${formatDate(entry.created_at)}</td><td>${escapeHtml(entry.actor_name||'System')}<span class="block text-xs text-gray-400">${escapeHtml(entry.actor_role||'')}</span></td><td>${escapeHtml(entry.action.replace(/_/g,' '))}</td><td>${escapeHtml(entry.entity||'—')}<span class="block text-xs text-gray-400 font-mono">${escapeHtml((entry.entity_id||'').slice(0,8))}</span></td><td class="text-xs">${escapeHtml(details)}</td></tr>`;
+    }).join('') : emptyRow(5,'No audit entries for this filter');
+    const pages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
+    document.getElementById('audit-total').textContent = `${total} recorded action${total===1?'':'s'}`;
+    document.getElementById('audit-page-label').textContent = `Page ${auditPage} of ${pages}`;
+    document.getElementById('audit-prev').disabled = auditPage <= 1;
+    document.getElementById('audit-next').disabled = auditPage >= pages;
+  } catch(error) { toast(error.message,true); }
+}
+function showPage(name) { document.querySelectorAll('.page').forEach(page=>page.classList.remove('active')); document.getElementById('page-'+name)?.classList.add('active'); document.querySelectorAll('.nav-btn[data-page]').forEach(button=>button.classList.toggle('active',button.dataset.page===name)); const titles={dashboard:'Dashboard',kpis:'Platform Performance','live-map':'Live Operations Map',deliveries:'Delivery Management',riders:'Rider Management',incidents:'Rider Incidents & Safety',customers:'Customer Management',businesses:'Business Accounts',zones:'Delivery Zones',pricing:'Pricing Configuration',finances:'Financial Overview',tickets:'Support Tickets',audit:'Audit Trail'}; document.getElementById('page-title').textContent=titles[name]||name; clearInterval(mapRefreshTimer); if(name==='live-map')mapRefreshTimer=setInterval(loadLiveMap,15000); const loaders={dashboard:loadDashboard,kpis:loadKpis,'live-map':loadLiveMap,deliveries:loadAdminDeliveries,riders:loadRiders,incidents:loadIncidents,customers:loadCustomers,businesses:loadBusinesses,zones:loadZones,pricing:loadPricing,finances:loadFinances,tickets:loadTickets,audit:()=>loadAudit(1)}; loaders[name]?.(); }
 if(token) api('/api/auth/me').then(user=>{if(user.role!=='admin')throw new Error('Administrator access is required');document.getElementById('admin-name').textContent=user.full_name||'Admin';enterApp();}).catch(handleLogout);
 
 const statusOptions=['created','searching','assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest','delivered','cancelled','failed'];
 let editingZoneId=null, selectedTicketId=null, adminMap=null, adminMapLayers=[], mapRefreshTimer=null, mapHasFittedBounds=false, adminMapTileLayer=null;
+let selectedIncidentId=null, auditPage=1;
+const AUDIT_PAGE_SIZE=25;
+const SEVERE=['critical','high','failed','cancelled','suspended','rejected','open'];
+const POSITIVE=['delivered','approved','resolved','active','online','ready','paid'];
 const mapRouteCache=new Map();
 const escapeHtml=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const emptyRow=(columns,message='No records found')=>`<tr><td colspan="${columns}" class="text-center text-gray-400 py-6">${message}</td></tr>`;
-const formatDate=value=>value?new Date(`${value.replace(' ','T')}Z`).toLocaleString():'—';
-const statusBadge=status=>`<span class="status-badge bg-gray-100 text-gray-700">${escapeHtml(status||'unknown')}</span>`;
+// Timestamps arrive in two shapes: SQLite UTC ("2026-07-31 06:08:59", no zone)
+// and ISO strings that already carry one. Appending "Z" blindly broke the second.
+const formatDate=value=>{
+  if(!value) return '—';
+  const raw=String(value).trim();
+  const hasZone=/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(raw);
+  const date=new Date(hasZone?raw.replace(' ','T'):`${raw.replace(' ','T')}Z`);
+  return Number.isNaN(date.getTime())?raw:date.toLocaleString();
+};
+// Colour carries meaning here: an operator scanning a table should see trouble
+// without reading every row.
+const statusBadge=status=>{const value=String(status||'unknown').toLowerCase();const tone=SEVERE.includes(value)?'bg-red-100 text-red-700':POSITIVE.includes(value)?'bg-green-100 text-green-700':value==='medium'||value==='pending'||value==='investigating'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-700';return `<span class="status-badge ${tone}">${escapeHtml(status||'unknown')}</span>`;};
 
 async function loadAdminDeliveries() { try { const search=document.getElementById('del-search').value.trim(), status=document.getElementById('del-filter').value; const query=new URLSearchParams({limit:'100'}); if(search)query.set('search',search); if(status)query.set('status',status); const deliveries=await api(`/api/admin/deliveries?${query}`); window.adminDeliveries=Object.fromEntries(deliveries.map(delivery=>[delivery.id,delivery])); document.getElementById('admin-del-tbody').innerHTML=deliveries.length?deliveries.map(delivery=>`<tr><td class="font-mono text-xs">${escapeHtml(delivery.order_no)}</td><td>${escapeHtml(delivery.customer_name||'—')}</td><td>${escapeHtml(delivery.rider_name||'Unassigned')}</td><td>${escapeHtml(delivery.service_type)}</td><td>${statusBadge(delivery.status)}</td><td>${formatMoney(delivery.total_charge)}</td><td>${formatDate(delivery.created_at)}</td><td><button class="btn-secondary btn-sm" onclick="showDeliveryModal('${delivery.id}')">Manage</button></td></tr>`).join(''):emptyRow(8); } catch(error) { toast(error.message,true); } }
-function showDeliveryModal(id) { try { const delivery=window.adminDeliveries?.[id]; if(!delivery)throw new Error('Delivery not found'); document.getElementById('del-modal-title').textContent=delivery.order_no; document.getElementById('del-modal-body').innerHTML=`<dl class="grid grid-cols-2 gap-3 text-sm mb-4"><div><dt class="text-gray-500">Customer</dt><dd>${escapeHtml(delivery.customer_name||'—')}</dd></div><div><dt class="text-gray-500">Rider</dt><dd>${escapeHtml(delivery.rider_name||'Unassigned')}</dd></div><div><dt class="text-gray-500">Pickup</dt><dd>${escapeHtml(delivery.pickup_address)}</dd></div><div><dt class="text-gray-500">Destination</dt><dd>${escapeHtml(delivery.dest_address)}</dd></div></dl><label class="text-sm font-medium">Status</label><select id="delivery-status" class="input-field mt-1">${statusOptions.map(status=>`<option value="${status}" ${status===delivery.status?'selected':''}>${status}</option>`).join('')}</select><label class="text-sm font-medium block mt-3">Admin note</label><textarea id="delivery-note" class="input-field mt-1" rows="3" placeholder="Reason for this status update"></textarea><button class="btn-primary mt-4" onclick="updateDeliveryStatus('${delivery.id}')">Save status</button>`; document.getElementById('del-modal').style.display='flex'; } catch(error) { toast(error.message,true); } }
+/**
+ * Everything operations needs about one delivery: the facts, the audit-worthy
+ * actions (status override, reassignment), and the proof the platform captured.
+ */
+async function showDeliveryModal(id) {
+  try {
+    const delivery = window.adminDeliveries?.[id];
+    if (!delivery) throw new Error('Delivery not found');
+    document.getElementById('del-modal-title').textContent = delivery.order_no;
+    const closed = ['delivered','cancelled','failed'].includes(delivery.status);
+    document.getElementById('del-modal-body').innerHTML = `
+      <div class="flex items-center gap-2 mb-3">${statusBadge(delivery.status)}${statusBadge(delivery.payment_status||'pending')}<span class="text-xs text-gray-500">${escapeHtml(delivery.service_type)} · ${formatDate(delivery.created_at)}</span></div>
+      <dl class="grid grid-cols-2 gap-3 text-sm mb-4">
+        <div><dt class="text-gray-500">Customer</dt><dd>${escapeHtml(delivery.customer_name||'—')}</dd></div>
+        <div><dt class="text-gray-500">Rider</dt><dd>${escapeHtml(delivery.rider_name||'Unassigned')}</dd></div>
+        <div><dt class="text-gray-500">Pickup</dt><dd>${escapeHtml(delivery.pickup_address)}<span class="block text-xs text-gray-400">${escapeHtml(delivery.pickup_name||'')} ${escapeHtml(delivery.pickup_phone||'')}</span></dd></div>
+        <div><dt class="text-gray-500">Destination</dt><dd>${escapeHtml(delivery.dest_address)}<span class="block text-xs text-gray-400">${escapeHtml(delivery.dest_name||'')} ${escapeHtml(delivery.dest_phone||'')}</span></dd></div>
+        <div><dt class="text-gray-500">Charge</dt><dd>${formatMoney(delivery.total_charge)} <span class="text-xs text-gray-400">fee ${formatMoney(delivery.platform_fee)}</span></dd></div>
+        <div><dt class="text-gray-500">Distance</dt><dd>${delivery.distance_km ?? '—'} km</dd></div>
+      </dl>
+      <div class="flex gap-2 mb-3 flex-wrap">
+        ${Number.isFinite(Number(delivery.pickup_lat))?`<button class="btn-secondary btn-sm" onclick="document.getElementById('del-modal').style.display='none';showPage('live-map');focusMapPoint(${Number(delivery.pickup_lat)},${Number(delivery.pickup_lng)})"><i class="fas fa-map-pin mr-1"></i>Show on map</button>`:''}
+        <button class="btn-secondary btn-sm" onclick="loadDeliveryTimeline('${delivery.id}')"><i class="fas fa-timeline mr-1"></i>Timeline</button>
+        ${delivery.status==='delivered'?`<button class="btn-secondary btn-sm" onclick="loadDeliveryProof('${delivery.id}')"><i class="fas fa-file-signature mr-1"></i>Proof of delivery</button>`:''}
+        <button class="btn-secondary btn-sm" onclick="loadDeliveryReceipt('${delivery.id}')"><i class="fas fa-receipt mr-1"></i>Receipt</button>
+      </div>
+      <div id="del-modal-detail" class="mb-3"></div>
+      <label class="text-sm font-medium">Status override</label>
+      <select id="delivery-status" class="input-field mt-1">${statusOptions.map(status=>`<option value="${status}" ${status===delivery.status?'selected':''}>${status}</option>`).join('')}</select>
+      <label class="text-sm font-medium block mt-3">Admin note</label>
+      <textarea id="delivery-note" class="input-field mt-1" rows="2" placeholder="Reason for this status update"></textarea>
+      <button class="btn-primary mt-3" onclick="updateDeliveryStatus('${delivery.id}')">Save status</button>
+      ${closed?'':`<div class="mt-4 pt-4 border-t border-gray-100"><label class="text-sm font-medium">Reassign to another approved rider</label><div class="flex gap-2 mt-1"><select id="delivery-rider" class="input-field"><option value="">Loading riders…</option></select><button class="btn-secondary" onclick="reassignDelivery('${delivery.id}')">Reassign</button></div><p class="text-xs text-gray-500 mt-1">The current rider is released and both parties are notified.</p></div>`}`;
+    document.getElementById('del-modal').style.display = 'flex';
+    if (!closed) fillReassignRiders(delivery.rider_id);
+  } catch(error) { toast(error.message,true); }
+}
+
+async function fillReassignRiders(currentRiderId) {
+  const select = document.getElementById('delivery-rider');
+  if (!select) return;
+  try {
+    const riders = (await api('/api/admin/users?role=rider&limit=100')).filter(rider=>rider.approval_status==='approved' && rider.id!==currentRiderId);
+    select.innerHTML = riders.length
+      ? `<option value="">Select a rider…</option>${riders.map(rider=>`<option value="${rider.id}">${escapeHtml(rider.full_name)} · ${escapeHtml(rider.motorcycle_plate||'no plate')} · ${escapeHtml(rider.online_status||'offline')}</option>`).join('')}`
+      : '<option value="">No approved riders available</option>';
+  } catch { select.innerHTML = '<option value="">Could not load riders</option>'; }
+}
+
+async function reassignDelivery(id) {
+  const riderId = document.getElementById('delivery-rider')?.value;
+  if (!riderId) return toast('Choose the rider who should take this delivery', true);
+  try {
+    await api(`/api/admin/deliveries/${id}/reassign`,{method:'PUT',body:JSON.stringify({rider_id:riderId})});
+    document.getElementById('del-modal').style.display='none';
+    toast('Delivery reassigned');
+    loadAdminDeliveries();
+  } catch(error) { toast(error.message,true); }
+}
+
+async function loadDeliveryTimeline(id) {
+  const target = document.getElementById('del-modal-detail');
+  target.innerHTML = '<p class="text-sm text-gray-500">Loading timeline…</p>';
+  try {
+    const { events } = await api(`/api/deliveries/${id}/track`);
+    target.innerHTML = events.length
+      ? `<h4 class="font-bold text-sm mb-2">Delivery timeline</h4><ol class="space-y-1 text-sm">${events.map(event=>`<li class="flex justify-between gap-3 border-b border-gray-100 pb-1"><span>${escapeHtml(event.note||event.status.replace(/_/g,' '))}</span><span class="text-xs text-gray-400 whitespace-nowrap">${formatDate(event.created_at)}</span></li>`).join('')}</ol>`
+      : '<p class="text-sm text-gray-500">No events recorded yet.</p>';
+  } catch(error) { target.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(error.message)}</p>`; }
+}
+
+async function loadDeliveryProof(id) {
+  const target = document.getElementById('del-modal-detail');
+  target.innerHTML = '<p class="text-sm text-gray-500">Loading proof of delivery…</p>';
+  try {
+    const pod = await api(`/api/deliveries/${id}/pod`);
+    target.innerHTML = `<h4 class="font-bold text-sm mb-2">Proof of delivery · ${escapeHtml(pod.reference)}</h4><dl class="grid grid-cols-2 gap-3 text-sm"><div><dt class="text-gray-500">Collected</dt><dd>${formatDate(pod.pickup.verified_at)} ${pod.pickup.otp_verified?'<span class="text-green-600">code verified</span>':''}</dd></div><div><dt class="text-gray-500">Delivered</dt><dd>${formatDate(pod.delivery.verified_at)} ${pod.delivery.otp_verified?'<span class="text-green-600">code verified</span>':''}</dd></div><div><dt class="text-gray-500">Received by</dt><dd>${escapeHtml(pod.delivery.recipient||'—')}</dd></div><div><dt class="text-gray-500">Rider</dt><dd>${escapeHtml(pod.rider?.name||'—')} ${escapeHtml(pod.rider?.plate||'')}</dd></div></dl><div class="flex gap-2 mt-3">${['pickup','delivery'].filter(kind=>pod[kind].photo).map(kind=>`<button class="btn-secondary btn-sm" onclick="openProofPhoto('${id}','${kind}')"><i class="fas fa-image mr-1"></i>${kind} photo</button>`).join('')||'<span class="text-xs text-gray-500">No proof photos were captured.</span>'}</div><div id="proof-photo" class="mt-3"></div>`;
+  } catch(error) { target.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(error.message)}</p>`; }
+}
+
+/** Proof photos are access-controlled, so they are fetched with the admin token. */
+async function openProofPhoto(id, kind) {
+  const holder = document.getElementById('proof-photo');
+  holder.innerHTML = '<p class="text-sm text-gray-500">Loading image…</p>';
+  try {
+    const response = await fetch(`${API}/api/deliveries/${id}/proof/${kind}`, { headers: { Authorization: 'Bearer ' + token } });
+    if (!response.ok) throw new Error('Proof image unavailable');
+    renderAuthorisedImage(holder, await response.blob(), `${kind} proof`);
+  } catch(error) { holder.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(error.message)}</p>`; }
+}
+
+async function loadDeliveryReceipt(id) {
+  const target = document.getElementById('del-modal-detail');
+  target.innerHTML = '<p class="text-sm text-gray-500">Loading receipt…</p>';
+  try {
+    const receipt = await api(`/api/deliveries/${id}/receipt`);
+    target.innerHTML = `<h4 class="font-bold text-sm mb-2">Receipt · ${escapeHtml(receipt.receipt_no)}</h4><dl class="space-y-1 text-sm"><div class="flex justify-between"><dt class="text-gray-500">Delivery fee</dt><dd>${formatMoney(receipt.amounts.delivery_fee)}</dd></div><div class="flex justify-between"><dt class="text-gray-500">Platform fee</dt><dd>${formatMoney(receipt.amounts.platform_fee)}</dd></div>${receipt.amounts.cancellation_fee?`<div class="flex justify-between"><dt class="text-gray-500">Cancellation fee</dt><dd>${formatMoney(receipt.amounts.cancellation_fee)}</dd></div>`:''}<div class="flex justify-between font-bold"><dt>Total charged</dt><dd>${formatMoney(receipt.amounts.total)}</dd></div><div class="flex justify-between"><dt class="text-gray-500">Payment</dt><dd>${escapeHtml(receipt.payment.method||'—')} · ${escapeHtml(receipt.payment.status||'—')}</dd></div></dl>${receipt.payments.length?`<table class="mt-3"><thead><tr><th>Entry</th><th>Amount</th><th>Status</th></tr></thead><tbody>${receipt.payments.map(payment=>`<tr><td>${escapeHtml(payment.type.replace(/_/g,' '))}</td><td>${formatMoney(payment.amount)}</td><td>${statusBadge(payment.status)}</td></tr>`).join('')}</tbody></table>`:''}`;
+  } catch(error) { target.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(error.message)}</p>`; }
+}
+
 async function updateDeliveryStatus(id) { try { await api(`/api/admin/deliveries/${id}`,{method:'PUT',body:JSON.stringify({status:document.getElementById('delivery-status').value,note:document.getElementById('delivery-note').value.trim()})}); document.getElementById('del-modal').style.display='none'; toast('Delivery status updated'); loadAdminDeliveries(); } catch(error) { toast(error.message,true); } }
 
-async function loadRiders() { try { const search=document.getElementById('rider-search').value.trim(), approval=document.getElementById('rider-filter').value; const query=new URLSearchParams({role:'rider',limit:'100'}); if(search)query.set('search',search); const riders=await api(`/api/admin/users?${query}`); const filtered=approval?riders.filter(rider=>rider.approval_status===approval):riders; document.getElementById('rider-tbody').innerHTML=filtered.length?filtered.map(rider=>`<tr><td>${escapeHtml(rider.full_name)}</td><td>${escapeHtml(rider.phone)}</td><td>${escapeHtml(rider.motorcycle_plate||'—')}</td><td>${Number(rider.avg_rating||0).toFixed(1)}</td><td>${rider.total_deliveries||0}</td><td>${formatMoney(rider.total_earnings)}</td><td>${statusBadge(rider.approval_status)}</td><td class="space-x-1">${rider.approval_status==='pending'?`<button class="btn-primary btn-sm" onclick="setRiderStatus('${rider.id}','approve')">Approve</button><button class="btn-danger btn-sm" onclick="setRiderStatus('${rider.id}','reject')">Reject</button>`:`<button class="btn-danger btn-sm" onclick="setRiderStatus('${rider.id}','suspend')">Suspend</button>`}</td></tr>`).join(''):emptyRow(8); } catch(error) { toast(error.message,true); } }
-async function setRiderStatus(id,action) { if(!confirm(`Are you sure you want to ${action} this rider?`))return; try { await api(`/api/admin/riders/${id}/approve`,{method:'PUT',body:JSON.stringify({action})}); toast(`Rider ${action}d`); loadRiders(); loadDashboard(); } catch(error) { toast(error.message,true); } }
-async function loadCustomers() { try { const users=await api('/api/admin/users?role=customer&limit=100'); document.getElementById('customer-tbody').innerHTML=users.length?users.map(user=>`<tr><td>${escapeHtml(user.full_name)}</td><td>${escapeHtml(user.phone)}</td><td>${escapeHtml(user.email||'—')}</td><td>${statusBadge(user.status)}</td><td>${formatDate(user.created_at)}</td></tr>`).join(''):emptyRow(5); } catch(error) { toast(error.message,true); } }
-async function loadBusinesses() { try { const businesses=await api('/api/admin/users?role=business&limit=100'); document.getElementById('biz-tbody').innerHTML=businesses.length?businesses.map(business=>`<tr><td>${escapeHtml(business.company_name||'—')}</td><td>${escapeHtml(business.full_name)}</td><td>${escapeHtml(business.phone)}</td><td>${escapeHtml(business.tax_id||'—')}</td><td>${statusBadge(business.biz_status||business.status)}</td><td>${formatDate(business.created_at)}</td></tr>`).join(''):emptyRow(6); } catch(error) { toast(error.message,true); } }
+async function loadRiders() { try { const search=document.getElementById('rider-search').value.trim(), approval=document.getElementById('rider-filter').value; const query=new URLSearchParams({role:'rider',limit:'100'}); if(search)query.set('search',search); const riders=await api(`/api/admin/users?${query}`); const filtered=approval?riders.filter(rider=>rider.approval_status===approval):riders; document.getElementById('rider-tbody').innerHTML=filtered.length?filtered.map(rider=>`<tr><td>${escapeHtml(rider.full_name)}</td><td>${escapeHtml(rider.phone)}</td><td>${escapeHtml(rider.motorcycle_plate||'Not provided')}<span class="block text-xs text-gray-400">${escapeHtml([rider.motorcycle_make,rider.motorcycle_type].filter(Boolean).join(' · '))}</span></td><td>${statusBadge(rider.availability||rider.online_status)}<span class="block text-xs text-gray-400">${rider.last_location_update?`GPS ${formatDate(rider.last_location_update)}`:'No GPS yet'}</span></td><td>${Number(rider.avg_rating||0).toFixed(1)}<span class="block text-xs text-gray-400">${rider.rating_count||0} ratings</span></td><td>${rider.total_deliveries||0}</td><td>${formatMoney(rider.total_earnings)}</td><td>${statusBadge(rider.approval_status)}</td><td class="space-x-1"><button class="btn-secondary btn-sm" onclick="showRiderModal('${rider.id}')">Review</button>${rider.approval_status==='pending'?`<button class="btn-primary btn-sm" onclick="setRiderStatus('${rider.id}','approve')">Approve</button>`:`<button class="btn-danger btn-sm" onclick="setRiderStatus('${rider.id}','suspend')">Suspend</button>`}</td></tr>`).join(''):emptyRow(9); } catch(error) { toast(error.message,true); } }
+async function setRiderStatus(id,action) { if(!confirm(`Are you sure you want to ${action} this rider?`))return; try { await api(`/api/admin/riders/${id}/approve`,{method:'PUT',body:JSON.stringify({action})}); toast(`Rider ${action}d`); document.getElementById('rider-modal').style.display='none'; loadRiders(); loadDashboard(); } catch(error) { toast(error.message,true); } }
+
+/**
+ * Rider dossier used for the approval decision (spec §9.5): identity documents,
+ * vehicle details, performance and recent work — approving blind is the one thing
+ * a verification workflow must not allow.
+ */
+async function showRiderModal(id) {
+  document.getElementById('rider-modal').style.display = 'flex';
+  document.getElementById('rider-modal-title').textContent = 'Rider dossier';
+  const body = document.getElementById('rider-modal-body');
+  body.innerHTML = '<p class="text-sm text-gray-500">Loading rider…</p>';
+  try {
+    const rider = await api(`/api/admin/riders/${id}`);
+    document.getElementById('rider-modal-title').textContent = rider.full_name || 'Rider';
+    const documents = [['profile','Profile photo'],['id_front','ID front'],['id_back','ID back'],['license','Licence'],['motorcycle','Motorcycle']];
+    body.innerHTML = `
+      <div class="flex items-center gap-2 mb-3">${statusBadge(rider.approval_status)}${statusBadge(rider.online_status)}<span class="text-xs text-gray-500">Joined ${formatDate(rider.created_at)}</span></div>
+      <dl class="grid grid-cols-2 gap-3 text-sm mb-4">
+        <div><dt class="text-gray-500">Phone</dt><dd>${escapeHtml(rider.phone)}</dd></div>
+        <div><dt class="text-gray-500">National ID</dt><dd>${escapeHtml(rider.national_id||'—')}</dd></div>
+        <div><dt class="text-gray-500">Licence</dt><dd>${escapeHtml(rider.license_number||'—')}</dd></div>
+        <div><dt class="text-gray-500">Motorcycle</dt><dd>${escapeHtml([rider.motorcycle_color,rider.motorcycle_make,rider.motorcycle_plate].filter(Boolean).join(' · ')||'—')}</dd></div>
+        <div><dt class="text-gray-500">Deliveries</dt><dd>${rider.total_deliveries||0}</dd></div>
+        <div><dt class="text-gray-500">Rating</dt><dd>${Number(rider.avg_rating||0).toFixed(1)} (${rider.rating_count||0})</dd></div>
+        <div><dt class="text-gray-500">Earnings</dt><dd>${formatMoney(rider.total_earnings)}</dd></div>
+        <div><dt class="text-gray-500">Emergency contact</dt><dd>${escapeHtml(rider.emergency_name||'—')} ${escapeHtml(rider.emergency_phone||'')}</dd></div>
+      </dl>
+      <h4 class="font-bold text-sm mb-2">Verification documents</h4>
+      <div class="flex flex-wrap gap-2">${documents.map(([kind,label])=>`<button class="btn-secondary btn-sm" onclick="openRiderDocument('${rider.user_id||rider.id}','${kind}')">${label}</button>`).join('')}</div>
+      <div id="rider-document" class="mt-3"></div>
+      <h4 class="font-bold text-sm mt-4 mb-2">Recent deliveries</h4>
+      ${rider.recentDeliveries?.length?`<table><thead><tr><th>Order</th><th>Status</th><th>Earnings</th><th>Date</th></tr></thead><tbody>${rider.recentDeliveries.map(delivery=>`<tr><td class="font-mono text-xs">${escapeHtml(delivery.order_no)}</td><td>${statusBadge(delivery.status)}</td><td>${formatMoney(delivery.rider_earnings)}</td><td>${formatDate(delivery.created_at)}</td></tr>`).join('')}</tbody></table>`:'<p class="text-sm text-gray-500">No deliveries yet.</p>'}
+      <div class="flex gap-2 mt-4 pt-4 border-t border-gray-100">
+        ${rider.approval_status==='approved'
+          ? `<button class="btn-danger" onclick="setRiderStatus('${rider.user_id||rider.id}','suspend')">Suspend rider</button>`
+          : `<button class="btn-primary" onclick="setRiderStatus('${rider.user_id||rider.id}','approve')">Approve rider</button><button class="btn-danger" onclick="setRiderStatus('${rider.user_id||rider.id}','reject')">Reject</button>`}
+      </div>`;
+  } catch(error) { body.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(error.message)}</p>`; }
+}
+
+async function openRiderDocument(riderId, kind) {
+  const holder = document.getElementById('rider-document');
+  holder.innerHTML = '<p class="text-sm text-gray-500">Loading document…</p>';
+  try {
+    const response = await fetch(`${API}/api/rider/documents/${riderId}/${kind}`, { headers: { Authorization: 'Bearer ' + token } });
+    if (!response.ok) throw new Error('This document has not been uploaded yet');
+    renderAuthorisedImage(holder, await response.blob(), `${kind} document`);
+  } catch(error) { holder.innerHTML = `<p class="text-sm text-red-500">${escapeHtml(error.message)}</p>`; }
+}
+
+/**
+ * Renders a protected image from its blob. Built through the DOM rather than an
+ * HTML string so the object URL is never concatenated into markup, and the old
+ * one is revoked instead of leaking for the life of the session.
+ */
+function renderAuthorisedImage(holder, blob, label) {
+  const previous = holder.querySelector('img');
+  if (previous?.dataset.objectUrl) URL.revokeObjectURL(previous.dataset.objectUrl);
+  const objectUrl = URL.createObjectURL(blob);
+  const image = document.createElement('img');
+  image.setAttribute('alt', label);
+  image.dataset.objectUrl = objectUrl;
+  image.style.maxWidth = '100%';
+  image.style.borderRadius = '12px';
+  image.src = objectUrl;
+  holder.replaceChildren(image);
+}
+const accountAction=user=>user.status==='suspended'
+  ? `<button class="btn-primary btn-sm" onclick="setAccountStatus('${user.id}','active')">Reinstate</button>`
+  : `<button class="btn-danger btn-sm" onclick="setAccountStatus('${user.id}','suspended')">Suspend</button>`;
+
+async function loadCustomers() { try { const users=await api('/api/admin/users?role=customer&limit=100'); document.getElementById('customer-tbody').innerHTML=users.length?users.map(user=>`<tr><td>${escapeHtml(user.full_name)}</td><td>${escapeHtml(user.phone)}</td><td>${escapeHtml(user.email||'—')}</td><td>${statusBadge(user.status)}</td><td>${formatDate(user.created_at)}</td><td>${accountAction(user)}</td></tr>`).join(''):emptyRow(6); } catch(error) { toast(error.message,true); } }
+async function loadBusinesses() { try { const businesses=await api('/api/admin/users?role=business&limit=100'); document.getElementById('biz-tbody').innerHTML=businesses.length?businesses.map(business=>`<tr><td>${escapeHtml(business.company_name||'—')}</td><td>${escapeHtml(business.full_name)}</td><td>${escapeHtml(business.phone)}</td><td>${escapeHtml(business.tax_id||'—')}</td><td>${statusBadge(business.status)}</td><td>${formatDate(business.created_at)}</td><td>${accountAction(business)}</td></tr>`).join(''):emptyRow(7); } catch(error) { toast(error.message,true); } }
+
+/**
+ * Suspends or reinstates a customer or business account. A reason is required for
+ * suspension because it lands in the audit trail and in the customer's notification.
+ */
+async function setAccountStatus(id, status) {
+  const reason = status === 'suspended' ? prompt('Why is this account being suspended? (recorded in the audit trail)') : null;
+  if (status === 'suspended' && !reason) return;
+  try {
+    await api(`/api/admin/users/${id}/status`,{method:'PUT',body:JSON.stringify({status,reason:reason||undefined})});
+    toast(`Account ${status==='suspended'?'suspended':'reinstated'}`);
+    loadCustomers(); loadBusinesses();
+  } catch(error) {
+    if (/in flight/i.test(error.message) && confirm(`${error.message}\n\nSuspend anyway?`)) {
+      try {
+        await api(`/api/admin/users/${id}/status`,{method:'PUT',body:JSON.stringify({status,reason:reason||undefined,force:true})});
+        toast('Account suspended'); loadCustomers(); loadBusinesses(); return;
+      } catch(forced) { return toast(forced.message,true); }
+    }
+    toast(error.message,true);
+  }
+}
 
 async function loadZones() { try { const zones=await api('/api/admin/zones'); document.getElementById('zones-grid').innerHTML=zones.length?zones.map(zone=>`<article class="card"><div class="flex justify-between gap-2"><div><h3 class="font-bold">${escapeHtml(zone.name)}</h3><p class="text-xs text-gray-500 mt-1">${Number(zone.center_lat).toFixed(4)}, ${Number(zone.center_lng).toFixed(4)} · ${zone.radius_km} km</p></div>${statusBadge(zone.is_active?'active':'inactive')}</div><dl class="grid grid-cols-3 gap-2 text-xs mt-4"><div><dt class="text-gray-500">Parcel</dt><dd>${formatMoney(zone.base_price_parcel)}</dd></div><div><dt class="text-gray-500">Document</dt><dd>${formatMoney(zone.base_price_document)}</dd></div><div><dt class="text-gray-500">Per km</dt><dd>${formatMoney(zone.per_km_rate)}</dd></div></dl><button class="btn-secondary btn-sm mt-4" onclick="showZoneModal('${zone.id}')">Edit</button></article>`).join(''): '<p class="text-gray-500">No delivery zones configured.</p>'; window.adminZones=zones; } catch(error) { toast(error.message,true); } }
 function showZoneModal(id=null) { editingZoneId=id; const zone=id?(window.adminZones||[]).find(item=>item.id===id):null; document.getElementById('zone-modal-title').textContent=zone?'Edit Zone':'Add Zone'; const fields={name:zone?.name||'',lat:zone?.center_lat||'',lng:zone?.center_lng||'',radius:zone?.radius_km||3,parcel:zone?.base_price_parcel||'',doc:zone?.base_price_document||'',rate:zone?.per_km_rate||200}; Object.entries(fields).forEach(([key,value])=>document.getElementById(`zone-${key}`).value=value); document.getElementById('zone-modal').style.display='flex'; }

@@ -24,6 +24,7 @@ import com.movo.design.MovoTone
 import com.movo.design.RouteCard
 import com.movo.design.ShimmerCard
 import com.movo.design.StatusPill
+import com.movo.design.formatTimestamp
 import com.movo.design.serviceLabel
 
 enum class ActivityFilter(val apiValue: String, val title: String) {
@@ -111,7 +112,7 @@ internal fun DeliveryRow(delivery: Delivery, filter: ActivityFilter, onTrack: (S
         )
         delivery.createdAt?.let {
             Spacer(Modifier.height(MovoSpacing.small))
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(formatTimestamp(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -18,13 +18,16 @@ test('admin login form defaults identify an active admin account', () => {
 });
 
 test('admin page inline scripts parse so the Sign In handler is available', () => {
-  const inlineScripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
-    .filter(match => !/\bsrc\s*=/.test(match[0]))
-    .map(match => match[1])
+  // Only the opening tag decides whether a script is external; the body may well
+  // contain `src=` inside markup templates or image handling.
+  const inlineScripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)]
+    .filter(match => !/\bsrc\s*=/.test(match[1]))
+    .map(match => match[2])
     .join('\n');
 
   assert.doesNotThrow(() => new Function(inlineScripts));
   assert.match(inlineScripts, /function handleLogin\s*\(/);
+  assert.ok(inlineScripts.length > 5000, 'the portal logic must be extracted, not an empty match');
 });
 
 test('live map uses real OSM tiles, routes, and timed rider-location refreshes', () => {

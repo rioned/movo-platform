@@ -245,7 +245,7 @@ fun TrackingScreen(
                             timeline.asReversed().map { event ->
                                 TimelineEntry(
                                     title = event.note ?: MovoDeliveryStage.from(event.status).customerLabel,
-                                    subtitle = event.createdAt
+                                    subtitle = event.createdAt?.let(::formatTimestamp)
                                 )
                             }
                         )
