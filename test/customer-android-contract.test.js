@@ -249,6 +249,9 @@ test('MOVO map-first colors and forced-restore rescan', () => {
     /0xFFFCFCFA/, /0xFF086B4D/, /0xFF19A974/, /0xFF151817/, /0xFFF5A623/,
     /NavigationBarItem|navigationBar.*send/i
   ]);
+  // The session is persistence only: it must not reach into rider discovery or
+  // selection. It does now persist a ride journey alongside the send journey —
+  // "ride" is a domain noun here, not the UI leak this guards against.
   const session = read('src/main/kotlin/com/movo/customer/session/CustomerSession.kt');
-  assert.doesNotMatch(session, /ride|nearby|RiderSelection|DiscoverySnapshot/);
+  assert.doesNotMatch(session, /nearby|RiderSelection|DiscoverySnapshot|DiscoveryPhase/);
 });

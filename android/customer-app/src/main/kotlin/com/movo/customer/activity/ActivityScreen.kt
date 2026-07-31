@@ -42,7 +42,9 @@ enum class ActivityFilter(val apiValue: String, val title: String) {
  */
 @Composable
 fun ActivityScreen(api: CustomerApi, mode: MovoServiceMode, onTrack: (String) -> Unit) {
-    var filter by remember { mutableStateOf(ActivityFilter.All) }
+    // Reset per mode: a ride has no sender/received split, so switching product
+    // must not carry a "Received" filter across into a list that cannot honour it.
+    var filter by remember(mode) { mutableStateOf(ActivityFilter.All) }
     var showAllModes by remember(mode) { mutableStateOf(false) }
     var jobs by remember { mutableStateOf<List<Delivery>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -54,9 +56,8 @@ fun ActivityScreen(api: CustomerApi, mode: MovoServiceMode, onTrack: (String) ->
 
     LaunchedEffect(filter, mode) {
         loading = true; error = null
-        val role = if (relationshipFilters) filter.apiValue else ActivityFilter.All.apiValue
         runCatching {
-            val data = api.get("/api/mobile/v1/customer/deliveries?role=$role").dataObject()
+            val data = api.get("/api/mobile/v1/customer/deliveries?role=${filter.apiValue}").dataObject()
             val array = data.optJSONArray("deliveries")
             List(array?.length() ?: 0) { array!!.getJSONObject(it).toDelivery() }
         }.onSuccess { jobs = it }.onFailure { error = it.message }
