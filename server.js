@@ -1,7 +1,14 @@
 /**
  * MOVO Platform — Complete Backend Server
- * Rwanda's Trusted Digital Logistics Platform
- * Parcel & Document Delivery | Kigali
+ * Rwanda's Trusted Digital Mobility Platform
+ * Moto Rides & Parcel/Document Delivery | Kigali
+ *
+ * MOVO runs two products on one dispatch engine (see SERVICE_MODES below):
+ *   • ride     — a passenger travels on the motorcycle, Uber-style.
+ *   • delivery — a parcel or document travels without its sender.
+ * Both are rows in `deliveries` because they share a route, a rider, a price,
+ * a lifecycle and a settlement. Only the words, the fare table and the
+ * verification rules differ, and each of those is a mode-keyed lookup.
  */
 
 const express = require('express');
@@ -190,7 +197,7 @@ db.exec(`
     customer_id TEXT REFERENCES users(id),
     business_id TEXT,
     rider_id TEXT REFERENCES users(id),
-    service_type TEXT NOT NULL CHECK(service_type IN ('parcel','document')),
+    service_type TEXT NOT NULL CHECK(service_type IN ('parcel','document','ride')),
     status TEXT NOT NULL DEFAULT 'created',
     pickup_address TEXT NOT NULL,
     pickup_lat REAL,
@@ -381,12 +388,66 @@ for (const migration of [
   "ALTER TABLE users ADD COLUMN last_login_at TEXT",
   "ALTER TABLE riders ADD COLUMN availability TEXT DEFAULT 'offline'",
   "ALTER TABLE riders ADD COLUMN accepted_offers INTEGER DEFAULT 0",
-  "ALTER TABLE riders ADD COLUMN declined_offers INTEGER DEFAULT 0"
+  "ALTER TABLE riders ADD COLUMN declined_offers INTEGER DEFAULT 0",
+  // Dual-mode platform: every existing row is a delivery, which is exactly what
+  // the default records, so the backfill is the default and no data moves.
+  "ALTER TABLE deliveries ADD COLUMN service_mode TEXT NOT NULL DEFAULT 'delivery'",
+  "ALTER TABLE deliveries ADD COLUMN passenger_count INTEGER DEFAULT 1",
+  "ALTER TABLE deliveries ADD COLUMN helmet_required INTEGER DEFAULT 1",
+  "ALTER TABLE deliveries ADD COLUMN has_luggage INTEGER DEFAULT 0",
+  "ALTER TABLE delivery_zones ADD COLUMN base_price_ride REAL",
+  "ALTER TABLE zone_pricing ADD COLUMN ride_price REAL",
+  // Riders choose which products they work. Both default on so no approved rider
+  // silently loses the delivery offers they already depend on.
+  "ALTER TABLE riders ADD COLUMN accepts_rides INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE riders ADD COLUMN accepts_deliveries INTEGER NOT NULL DEFAULT 1"
 ]) {
   try { db.exec(migration); } catch (error) {
     if (!String(error.message).includes('duplicate column name')) throw error;
   }
 }
+
+/**
+ * Widens the `service_type` CHECK constraint to admit 'ride' on databases created
+ * before MOVO carried passengers. SQLite cannot alter a constraint in place, so
+ * this runs the documented table-rebuild: the live DDL is reused verbatim with
+ * only the CHECK rewritten, which keeps every column that earlier migrations
+ * added without this function needing to know what they were.
+ */
+function ensureRideCapableDeliveries() {
+  const current = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='deliveries'").get()?.sql;
+  if (!current) return false;
+  const checkPattern = /CHECK\s*\(\s*service_type\s+IN\s*\(([^)]*)\)\s*\)/i;
+  const existing = current.match(checkPattern);
+  if (!existing || existing[1].includes("'ride'")) return false;
+
+  const rebuiltDdl = current
+    .replace(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"deliveries"|'deliveries'|`deliveries`|\[deliveries\]|deliveries)/i, 'CREATE TABLE "deliveries_rebuild"')
+    .replace(checkPattern, "CHECK(service_type IN ('parcel','document','ride'))");
+  const columns = db.prepare('PRAGMA table_info(deliveries)').all().map(column => `"${column.name}"`).join(',');
+
+  // Pragmas cannot be set inside a transaction, and the rename must not rewrite
+  // the foreign keys that other tables hold against `deliveries`.
+  db.pragma('foreign_keys = OFF');
+  db.pragma('legacy_alter_table = ON');
+  try {
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS "deliveries_rebuild"');
+      db.exec(rebuiltDdl);
+      db.exec(`INSERT INTO "deliveries_rebuild" (${columns}) SELECT ${columns} FROM deliveries`);
+      db.exec('DROP TABLE deliveries');
+      db.exec('ALTER TABLE "deliveries_rebuild" RENAME TO "deliveries"');
+    })();
+    const violations = db.pragma('foreign_key_check');
+    if (violations.length) throw new Error(`foreign key violations after rebuild: ${violations.length}`);
+  } finally {
+    db.pragma('legacy_alter_table = OFF');
+    db.pragma('foreign_keys = ON');
+  }
+  logger.info('schema_rebuilt_for_rides', { table: 'deliveries' });
+  return true;
+}
+ensureRideCapableDeliveries();
 db.exec(`
   CREATE TABLE IF NOT EXISTS incidents (
     id TEXT PRIMARY KEY,
@@ -403,6 +464,13 @@ db.exec(`
     resolved_at TEXT
   );
 
+  -- Restated after ensureRideCapableDeliveries(): rebuilding a table drops its
+  -- indexes, and these four were declared before that migration could run.
+  CREATE INDEX IF NOT EXISTS idx_deliveries_customer ON deliveries(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_deliveries_rider ON deliveries(rider_id);
+  CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
+  CREATE INDEX IF NOT EXISTS idx_deliveries_business ON deliveries(business_id);
+  CREATE INDEX IF NOT EXISTS idx_deliveries_service_mode ON deliveries(service_mode,status);
   CREATE INDEX IF NOT EXISTS idx_deliveries_preferred_rider ON deliveries(preferred_rider_id,status);
   CREATE INDEX IF NOT EXISTS idx_riders_dispatch_eligibility ON riders(approval_status,online_status,last_location_update);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_idempotency ON deliveries(idempotency_actor_id,idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -423,6 +491,29 @@ function seedData() {
     db.prepare('INSERT INTO users (id,phone,email,password,full_name,role,status) VALUES (?,?,?,?,?,?,?)')
       .run(uuidv4(), '+250780000000', 'admin@movo.rw', hash, 'MOVO Administrator', 'admin', 'active');
   }
+  // Tariff configuration is seeded before the zone matrix: rideFare() reads it,
+  // and a zone priced from fallbacks would disagree with a zone priced from config.
+  const cfgCount = db.prepare('SELECT COUNT(*) as c FROM pricing_config').get();
+  if (cfgCount.c === 0) {
+    const configs = [
+      ['platform_fee_percent','20'],['min_ride_price','800'],['cancel_fee_customer',500],
+      ['cancel_fee_rider',0],['waiting_fee_per_min',100],['max_waiting_free_min',5],
+      ['rider_accept_timeout_sec',30],['rider_search_radius_km',5],['rider_search_expand_km',2],
+      ['currency','RWF'],['currency_symbol','FRW'],
+      // Moto-ride tariff (spec §5 pricing): boarding fee + distance + time, floored.
+      ['ride_base_fare',500],['ride_per_km_rate',250],['ride_per_minute_rate',15],['min_ride_fare',700]
+    ];
+    const insCfg = db.prepare('INSERT OR REPLACE INTO pricing_config (key,value) VALUES (?,?)');
+    configs.forEach(c => insCfg.run(c[0], String(c[1])));
+  } else {
+    // An existing platform keeps its negotiated delivery prices and only gains the
+    // ride tariff it never had. INSERT OR IGNORE never overwrites an admin's value.
+    const addCfg = db.prepare('INSERT OR IGNORE INTO pricing_config (key,value) VALUES (?,?)');
+    for (const [key, value] of [['ride_base_fare','500'],['ride_per_km_rate','250'],['ride_per_minute_rate','15'],['min_ride_fare','700']]) {
+      addCfg.run(key, value);
+    }
+  }
+
   const zoneCount = db.prepare('SELECT COUNT(*) as c FROM delivery_zones').get();
   if (zoneCount.c === 0) {
     const zones = [
@@ -437,12 +528,13 @@ function seedData() {
       ['z9','Masaka / Kicukiro Outer',-1.9950,30.1250,4,2500,1800,260,8],
       ['z10','Batsinda / Rusororo',-1.9100,30.1100,5,3000,2200,280,9]
     ];
-    const insZone = db.prepare('INSERT INTO delivery_zones (id,name,center_lat,center_lng,radius_km,base_price_parcel,base_price_document,per_km_rate,sort_order) VALUES (?,?,?,?,?,?,?,?,?)');
-    zones.forEach(z => insZone.run(...z));
+    const rideBase = parseFloat(getConfig('ride_base_fare', '500')) || 500;
+    const insZone = db.prepare('INSERT INTO delivery_zones (id,name,center_lat,center_lng,radius_km,base_price_parcel,base_price_document,per_km_rate,sort_order,base_price_ride) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    zones.forEach(z => insZone.run(...z, rideBase));
 
     // Seed zone-to-zone pricing
     const allZones = db.prepare('SELECT id FROM delivery_zones ORDER BY sort_order').all();
-    const insPricing = db.prepare('INSERT INTO zone_pricing (id,origin_zone_id,dest_zone_id,parcel_price,document_price,estimated_min) VALUES (?,?,?,?,?,?)');
+    const insPricing = db.prepare('INSERT INTO zone_pricing (id,origin_zone_id,dest_zone_id,parcel_price,document_price,estimated_min,ride_price) VALUES (?,?,?,?,?,?,?)');
     for (const oz of allZones) {
       for (const dz of allZones) {
         const o = db.prepare('SELECT base_price_parcel,base_price_document,per_km_rate,center_lat,center_lng FROM delivery_zones WHERE id=?').get(oz.id);
@@ -451,22 +543,36 @@ function seedData() {
         const pPrice = Math.round(o.base_price_parcel + dist * o.per_km_rate);
         const dPrice = Math.round(o.base_price_document + dist * o.per_km_rate);
         const estMin = Math.round(10 + dist * 3);
-        insPricing.run(uuidv4(), oz.id, dz.id, pPrice, dPrice, estMin);
+        insPricing.run(uuidv4(), oz.id, dz.id, pPrice, dPrice, estMin, rideFare(dist, estMin));
       }
     }
   }
-  const cfgCount = db.prepare('SELECT COUNT(*) as c FROM pricing_config').get();
-  if (cfgCount.c === 0) {
-    const configs = [
-      ['platform_fee_percent','20'],['min_ride_price','800'],['cancel_fee_customer',500],
-      ['cancel_fee_rider',0],['waiting_fee_per_min',100],['max_waiting_free_min',5],
-      ['rider_accept_timeout_sec',30],['rider_search_radius_km',5],['rider_search_expand_km',2],
-      ['currency','RWF'],['currency_symbol','FRW']
-    ];
-    const insCfg = db.prepare('INSERT OR REPLACE INTO pricing_config (key,value) VALUES (?,?)');
-    configs.forEach(c => insCfg.run(c[0], String(c[1])));
-  }
+  backfillRideTariff();
   if (process.env.LIVE_MAP_DEMO_MODE === 'true') seedLiveMapDemoData();
+}
+
+/**
+ * Prices the ride product on a platform whose zones predate it. Only untouched
+ * (NULL) cells are filled, so a manually adjusted fare is never overwritten.
+ */
+function backfillRideTariff() {
+  const rideBase = parseFloat(getConfig('ride_base_fare', '500')) || 500;
+  const zonesFilled = db.prepare('UPDATE delivery_zones SET base_price_ride=? WHERE base_price_ride IS NULL').run(rideBase).changes;
+
+  const unpriced = db.prepare(`SELECT zp.id, zp.estimated_min, oz.center_lat AS o_lat, oz.center_lng AS o_lng, dz.center_lat AS d_lat, dz.center_lng AS d_lng
+    FROM zone_pricing zp
+    JOIN delivery_zones oz ON oz.id=zp.origin_zone_id
+    JOIN delivery_zones dz ON dz.id=zp.dest_zone_id
+    WHERE zp.ride_price IS NULL`).all();
+  const setRide = db.prepare('UPDATE zone_pricing SET ride_price=? WHERE id=?');
+  const fill = db.transaction(rows => {
+    for (const row of rows) {
+      const dist = haversine(row.o_lat, row.o_lng, row.d_lat, row.d_lng);
+      setRide.run(rideFare(dist, row.estimated_min), row.id);
+    }
+  });
+  fill(unpriced);
+  if (zonesFilled || unpriced.length) logger.info('ride_tariff_backfilled', { zones: zonesFilled, routes: unpriced.length });
 }
 
 function seedLiveMapDemoData() {
@@ -500,6 +606,60 @@ function seedLiveMapDemoData() {
     insertDelivery.run(id, orderNo, customerId, riderId, 'parcel', status, pickupAddress, pickupLat, pickupLng, 'Demo Sender', '+250730000010', destAddress, destLat, destLng, 'Demo Recipient', '+250730000011', 1500, 1200, 300, 1500, 'mobile_money');
     updateDelivery.run(riderId, status, id);
   });
+}
+
+// ─── Service catalogue ───────────────────────────────────────
+/**
+ * The two products MOVO sells, and the service types that belong to each. A
+ * customer picks a mode after signing in; everything downstream — the fare table,
+ * the wording, which verification codes exist — is keyed off this one table
+ * rather than scattered `if (isRide)` branches.
+ */
+const SERVICE_MODES = {
+  ride: {
+    mode: 'ride',
+    label: 'Moto ride',
+    serviceTypes: ['ride'],
+    defaultServiceType: 'ride',
+    /** The passenger is present at the destination, so no handover code is issued. */
+    requiresDeliveryOtp: false,
+    /** The passenger is their own recipient — never SMS them about "their parcel". */
+    notifiesRecipient: false,
+    minFareKey: 'min_ride_fare',
+    minFareFallback: '700'
+  },
+  delivery: {
+    mode: 'delivery',
+    label: 'Parcel & document delivery',
+    serviceTypes: ['parcel', 'document'],
+    defaultServiceType: 'parcel',
+    requiresDeliveryOtp: true,
+    notifiesRecipient: true,
+    minFareKey: 'min_ride_price',
+    minFareFallback: '800'
+  }
+};
+
+const SERVICE_MODE_VALUES = Object.keys(SERVICE_MODES);
+const SERVICE_TYPE_VALUES = SERVICE_MODE_VALUES.flatMap(mode => SERVICE_MODES[mode].serviceTypes);
+
+/** The mode a service type belongs to — the inverse index of SERVICE_MODES. */
+function serviceModeOf(serviceType) {
+  return SERVICE_MODE_VALUES.find(mode => SERVICE_MODES[mode].serviceTypes.includes(serviceType)) || null;
+}
+
+/** Resolves a request's {service_mode, service_type} pair, tolerating either alone. */
+function resolveService(body = {}) {
+  const requestedMode = typeof body.service_mode === 'string' ? body.service_mode.trim().toLowerCase() : null;
+  const requestedType = typeof body.service_type === 'string' ? body.service_type.trim().toLowerCase() : null;
+  const mode = requestedMode || (requestedType ? serviceModeOf(requestedType) : null) || 'delivery';
+  if (!SERVICE_MODES[mode]) throw new ValidationError(`service_mode must be one of ${SERVICE_MODE_VALUES.join(', ')}`, { code: 'unsupported_value', field: 'service_mode' });
+  const definition = SERVICE_MODES[mode];
+  const serviceType = requestedType || definition.defaultServiceType;
+  if (!definition.serviceTypes.includes(serviceType)) {
+    throw new ValidationError(`service_type must be one of ${definition.serviceTypes.join(', ')} for a ${mode}`, { code: 'unsupported_value', field: 'service_type' });
+  }
+  return { mode, serviceType, definition };
 }
 
 // ─── Utility Functions ───────────────────────────────────────
@@ -614,6 +774,20 @@ function findZone(lat, lng) {
   return nearest;
 }
 
+/**
+ * The published moto-ride tariff: a boarding fee plus distance and time, floored
+ * at the minimum fare. Kept as a function so the seed, the backfill and any admin
+ * recalculation all produce the same number for the same route.
+ */
+function rideFare(distanceKm, estimatedMinutes) {
+  const baseFare = parseFloat(getConfig('ride_base_fare', '500')) || 0;
+  const perKm = parseFloat(getConfig('ride_per_km_rate', '250')) || 0;
+  const perMinute = parseFloat(getConfig('ride_per_minute_rate', '15')) || 0;
+  const minimum = parseFloat(getConfig('min_ride_fare', '700')) || 0;
+  const metered = baseFare + (Number(distanceKm) || 0) * perKm + (Number(estimatedMinutes) || 0) * perMinute;
+  return Math.round(Math.max(metered, minimum));
+}
+
 function calcPrice(pickupLat, pickupLng, destLat, destLng, serviceType) {
   const oz = findZone(pickupLat, pickupLng);
   const dz = findZone(destLat, destLng);
@@ -621,18 +795,27 @@ function calcPrice(pickupLat, pickupLng, destLat, destLng, serviceType) {
   const pricing = db.prepare('SELECT * FROM zone_pricing WHERE origin_zone_id=? AND dest_zone_id=? AND is_active=1')
     .get(oz.id, dz.id);
   if (!pricing) return null;
+  const mode = serviceModeOf(serviceType);
+  if (!mode) return null;
+  const definition = SERVICE_MODES[mode];
+  const distanceKm = Math.round(haversine(pickupLat, pickupLng, destLat, destLng) * 10) / 10;
   const feePct = parseFloat(getConfig('platform_fee_percent', '20'));
-  const base = serviceType === 'parcel' ? pricing.parcel_price : pricing.document_price;
-  const minPrice = parseInt(getConfig('min_ride_price', '800'));
-  const customerPrice = Math.max(base, minPrice);
+  // A ride falls back to the live tariff when its matrix cell has not been priced
+  // yet, so a newly added zone never blocks a booking.
+  const base = mode === 'ride'
+    ? (pricing.ride_price ?? rideFare(distanceKm, pricing.estimated_min))
+    : serviceType === 'parcel' ? pricing.parcel_price : pricing.document_price;
+  const minPrice = parseFloat(getConfig(definition.minFareKey, definition.minFareFallback)) || 0;
+  const customerPrice = Math.max(Math.round(base), Math.round(minPrice));
   const platformFee = Math.round(customerPrice * feePct / 100);
   const riderEarnings = customerPrice - platformFee;
   return {
     originZone: oz, destZone: dz,
-    distance_km: Math.round(haversine(pickupLat, pickupLng, destLat, destLng) * 10) / 10,
+    distance_km: distanceKm,
     customerPrice, riderEarnings, platformFee,
     totalCharge: customerPrice,
     estimatedMinutes: pricing.estimated_min,
+    serviceMode: mode,
     serviceType
   };
 }
@@ -672,6 +855,17 @@ function audit(userId, action, entity, entityId, details) {
     .run(uuidv4(), userId, action, entity, entityId, details ? JSON.stringify(details) : null);
 }
 
+/**
+ * Testing aid: the configured master OTP clears any OTP prompt. Handover codes
+ * are four digits while account codes are six, so the master code's four-digit
+ * prefix counts as well. Always null in production (src/config/runtime.js).
+ */
+function isMasterOtp(value) {
+  if (!runtime.masterOtp || value === undefined || value === null) return false;
+  const candidate = String(value).trim();
+  return candidate === runtime.masterOtp || candidate === runtime.masterOtp.slice(0, 4);
+}
+
 /** One-time passwords leave through the configured SMS provider, never through the API response. */
 function deliverOtp(phone, otp, purpose) {
   if (runtime.otpTestMode) return;
@@ -686,6 +880,10 @@ function deliverOtp(phone, otp, purpose) {
  */
 function notifyDeliveryParticipant(delivery, type, title, body) {
   if (!delivery?.dest_phone) return;
+  // On a ride the passenger is the recipient and is already in the app, on the
+  // bike. Texting them "your item has arrived" would be nonsense, so modes that
+  // declare no separate recipient are skipped entirely.
+  if (!SERVICE_MODES[delivery.service_mode || 'delivery']?.notifiesRecipient) return;
   const canonical = normalizePhone(delivery.dest_phone);
   const recipient = canonical ? db.prepare("SELECT id FROM users WHERE phone=? AND role='customer'").get(canonical) : null;
   if (recipient && recipient.id !== delivery.customer_id) {
@@ -793,24 +991,29 @@ app.post('/api/auth/verify-otp', route((req, res) => {
   const canonicalPhone = normalizePhone(phone);
   const user = canonicalPhone ? db.prepare('SELECT * FROM users WHERE phone=?').get(canonicalPhone) : null;
   if (!user) return resErr(res, 'User not found', 404, 'account_not_found');
-  const lock = lockoutState(user);
-  if (lock.locked) return resErr(res, `Too many attempts. Try again in ${lock.minutes} minute(s).`, 423, 'account_locked');
-  if (!/^[0-9]{6}$/.test(otp)) return resErr(res, 'OTP must be six digits', 400, 'invalid_otp');
-  if (!runtime.otpTestMode) {
-    if ((user.otp_attempts || 0) >= runtime.security.maxOtpAttempts) {
-      db.prepare("UPDATE users SET otp_code=NULL,otp_expires=NULL,otp_attempts=0,locked_until=datetime('now', ?) WHERE id=?")
-        .run(`+${runtime.security.lockoutMinutes} minutes`, user.id);
-      return resErr(res, 'Too many verification attempts. Request a new code shortly.', 429, 'otp_attempts_exceeded');
+  // The master OTP skips the lockout and attempt counters too — a tester who has
+  // burned their attempts on a wrong code should not have to wait one out.
+  const master = isMasterOtp(otp);
+  if (!master) {
+    const lock = lockoutState(user);
+    if (lock.locked) return resErr(res, `Too many attempts. Try again in ${lock.minutes} minute(s).`, 423, 'account_locked');
+    if (!/^[0-9]{6}$/.test(otp)) return resErr(res, 'OTP must be six digits', 400, 'invalid_otp');
+    if (!runtime.otpTestMode) {
+      if ((user.otp_attempts || 0) >= runtime.security.maxOtpAttempts) {
+        db.prepare("UPDATE users SET otp_code=NULL,otp_expires=NULL,otp_attempts=0,locked_until=datetime('now', ?) WHERE id=?")
+          .run(`+${runtime.security.lockoutMinutes} minutes`, user.id);
+        return resErr(res, 'Too many verification attempts. Request a new code shortly.', 429, 'otp_attempts_exceeded');
+      }
+      if (!user.otp_code || !bcrypt.compareSync(otp, user.otp_code)) {
+        db.prepare('UPDATE users SET otp_attempts=COALESCE(otp_attempts,0)+1 WHERE id=?').run(user.id);
+        return resErr(res, 'Invalid OTP', 400, 'invalid_otp');
+      }
+      if (new Date(`${String(user.otp_expires).replace(' ', 'T')}Z`) < new Date()) return resErr(res, 'OTP expired', 400, 'otp_expired');
     }
-    if (!user.otp_code || !bcrypt.compareSync(otp, user.otp_code)) {
-      db.prepare('UPDATE users SET otp_attempts=COALESCE(otp_attempts,0)+1 WHERE id=?').run(user.id);
-      return resErr(res, 'Invalid OTP', 400, 'invalid_otp');
-    }
-    if (new Date(`${String(user.otp_expires).replace(' ', 'T')}Z`) < new Date()) return resErr(res, 'OTP expired', 400, 'otp_expired');
   }
   db.prepare("UPDATE users SET otp_code=NULL,otp_expires=NULL,otp_attempts=0,status='active' WHERE id=?").run(user.id);
   clearLoginFailures(user.id);
-  audit(user.id, 'otp_verified', 'user', user.id, null);
+  audit(user.id, 'otp_verified', 'user', user.id, master ? { master_otp: true } : null);
   resOK(res, { token: issueToken(user), user: authProfile(user) });
 }));
 
@@ -983,6 +1186,28 @@ app.put('/api/rider/status', auth, roleAuth('rider'), route((req, res) => {
   resOK(res, { online_status: requested, availability: requested, accepting_offers: requested === 'online' });
 }));
 
+/**
+ * Which products this rider works. A rider who only wants passenger trips, or
+ * only parcels, stops being offered the other — dispatch honours this in
+ * eligibleNearbyRiders(), so it changes what they are shown, not just what they
+ * decline. At least one product must stay enabled: a rider accepting nothing
+ * would sit online receiving no offers with no indication why.
+ */
+app.put('/api/rider/services', auth, roleAuth('rider'), route((req, res) => {
+  const current = db.prepare('SELECT accepts_rides,accepts_deliveries FROM riders WHERE user_id=?').get(req.user.id);
+  if (!current) return resErr(res, 'Rider profile not found', 404, 'rider_not_found');
+  const asFlag = (value, fallback) => (value === undefined || value === null ? fallback : (value === true || value === 1 || value === '1' || value === 'true') ? 1 : 0);
+  const acceptsRides = asFlag(req.body.accepts_rides, current.accepts_rides);
+  const acceptsDeliveries = asFlag(req.body.accepts_deliveries, current.accepts_deliveries);
+  if (!acceptsRides && !acceptsDeliveries) {
+    return resErr(res, 'Keep at least one service enabled so MOVO can send you work', 400, 'no_service_selected');
+  }
+  db.prepare("UPDATE riders SET accepts_rides=?,accepts_deliveries=?,updated_at=datetime('now') WHERE user_id=?")
+    .run(acceptsRides, acceptsDeliveries, req.user.id);
+  audit(req.user.id, 'rider_services_changed', 'rider', req.user.id, { accepts_rides: acceptsRides, accepts_deliveries: acceptsDeliveries });
+  resOK(res, { accepts_rides: acceptsRides, accepts_deliveries: acceptsDeliveries, message: 'Service preferences saved' });
+}));
+
 // ─── Rider safety: incidents and SOS (spec §7.10) ────────────
 const INCIDENT_KINDS = ['accident', 'unsafe_item', 'suspicious_customer', 'theft', 'vehicle_breakdown', 'harassment', 'sos', 'other'];
 
@@ -1021,8 +1246,9 @@ app.get('/api/rider/incidents', auth, roleAuth('rider'), route((req, res) => {
 app.get('/api/mobile/v1/rider/offers', auth, roleAuth('rider'), route((req, res) => {
   expireSelectedOffers();
   const offers = db.prepare(`SELECT o.id AS offer_id,o.expires_at,o.created_at,
-      d.id,d.order_no,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,
-      d.dest_address,d.dest_lat,d.dest_lng,d.rider_earnings,d.distance_km,d.item_description,d.special_instructions
+      d.id,d.order_no,d.service_mode,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,
+      d.dest_address,d.dest_lat,d.dest_lng,d.rider_earnings,d.distance_km,d.item_description,d.special_instructions,
+      d.passenger_count,d.has_luggage,d.helmet_required
     FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id
     WHERE o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
   // Sensitive sender/recipient identity is withheld until the rider accepts.
@@ -1044,9 +1270,9 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
 
 app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
   expireSelectedOffers();
-  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
+  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,r.accepts_rides,r.accepts_deliveries,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
   const activeDelivery = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
-  const offers = db.prepare(`SELECT o.id as offer_id,o.expires_at,d.id,d.order_no,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,d.pickup_name,d.pickup_phone,d.dest_address,d.dest_lat,d.dest_lng,d.dest_name,d.dest_phone,d.rider_earnings,d.distance_km
+  const offers = db.prepare(`SELECT o.id as offer_id,o.expires_at,d.id,d.order_no,d.service_mode,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,d.pickup_name,d.pickup_phone,d.dest_address,d.dest_lat,d.dest_lng,d.dest_name,d.dest_phone,d.rider_earnings,d.distance_km,d.passenger_count,d.has_luggage,d.helmet_required,d.special_instructions
     FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id WHERE o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
   resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, offers, serverTime: new Date().toISOString() });
 });
@@ -1205,15 +1431,25 @@ function customerDeliveries(user) {
     ORDER BY created_at DESC LIMIT 200`).all(user.id, canonicalPhone, canonicalPhone);
 }
 
-function eligibleNearbyRiders(lat, lng, radiusKm) {
+/**
+ * Approved, online, idle riders near a point, freshest location first.
+ *
+ * `serviceMode` narrows the pool to riders who work that product: a rider who has
+ * turned rides off must never be offered one, or they will decline it and pay for
+ * that in their acceptance rate.
+ */
+function eligibleNearbyRiders(lat, lng, radiusKm, serviceMode = null) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
+  const modeFilter = serviceMode === 'ride' ? 'AND r.accepts_rides=1'
+    : serviceMode === 'delivery' ? 'AND r.accepts_deliveries=1'
+    : '';
   const riders = db.prepare(`SELECT u.id,u.full_name,r.avg_rating,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,
-    r.current_lat,r.current_lng,r.last_location_update,
+    r.current_lat,r.current_lng,r.last_location_update,r.accepts_rides,r.accepts_deliveries,
     (SELECT COUNT(*) FROM deliveries d WHERE d.rider_id=r.user_id AND d.status NOT IN ('delivered','cancelled','failed')) AS active_count
     FROM users u JOIN riders r ON r.user_id=u.id
     WHERE u.status='active' AND r.approval_status='approved' AND r.online_status='online'
       AND r.current_lat BETWEEN -90 AND 90 AND r.current_lng BETWEEN -180 AND 180
-      AND r.last_location_update >= datetime('now', ?)`)
+      AND r.last_location_update >= datetime('now', ?) ${modeFilter}`)
     .all(`-${freshnessSeconds} seconds`);
   return riders
     .filter(rider => rider.active_count === 0)
@@ -1223,16 +1459,23 @@ function eligibleNearbyRiders(lat, lng, radiusKm) {
     .map(({ active_count, ...rider }) => rider);
 }
 
-app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (req, res) => {
+app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), route((req, res) => {
   const lat = Number(req.query.lat);
   const lng = Number(req.query.lng);
   const requestedRadius = req.query.radius_km === undefined ? 5 : Number(req.query.radius_km);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
     return resErr(res, 'Valid latitude and longitude required');
   if (!Number.isFinite(requestedRadius) || requestedRadius <= 0) return resErr(res, 'Valid radius required');
+  // Callers that predate dual mode omit `mode` and keep seeing every nearby rider.
+  const serviceMode = validate.oneOf(req.query.mode, SERVICE_MODE_VALUES, 'mode', { optional: true });
   const radiusKm = Math.min(requestedRadius, 20);
-  resOK(res, { riders: eligibleNearbyRiders(lat, lng, radiusKm), radius_km: radiusKm, serverTime: new Date().toISOString() });
-});
+  resOK(res, {
+    riders: eligibleNearbyRiders(lat, lng, radiusKm, serviceMode),
+    radius_km: radiusKm,
+    service_mode: serviceMode,
+    serverTime: new Date().toISOString()
+  });
+}));
 
 app.get('/api/mobile/v1/customer/home', auth, roleAuth('customer'), (req, res) => {
   const deliveries = customerDeliveries(req.user);
@@ -1267,16 +1510,31 @@ app.get('/api/mobile/v1/customer/deliveries', auth, roleAuth('customer'), (req, 
  */
 function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = null } = {}) {
   const {
-    service_type, pickup_address, pickup_lat, pickup_lng, pickup_name, pickup_phone, pickup_instructions,
-    dest_address, dest_lat, dest_lng, dest_name, dest_phone, dest_instructions,
+    pickup_address, pickup_lat, pickup_lng, pickup_instructions,
+    dest_address, dest_lat, dest_lng, dest_instructions,
     item_description, item_weight, item_category, special_instructions,
     payment_method, preferred_time, business_ref, department, preferred_rider_id, scheduled_for
   } = body;
 
+  const { mode, serviceType: service_type, definition } = resolveService(body);
+  const isRide = mode === 'ride';
+
+  // A ride carries its own customer: the passenger boards at pickup and steps off
+  // at the destination, so MOVO does not ask them to name a recipient they are.
+  const pickup_name = isRide ? (body.pickup_name || body.passenger_name || actor.full_name) : body.pickup_name;
+  const pickup_phone = isRide ? (body.pickup_phone || body.passenger_phone || actor.phone) : body.pickup_phone;
+  const dest_name = isRide ? (body.dest_name || pickup_name) : body.dest_name;
+  const dest_phone = isRide ? (body.dest_phone || pickup_phone) : body.dest_phone;
+
   if (!pickup_address || !dest_address || !pickup_name || !pickup_phone || !dest_name || !dest_phone) {
-    throw new ValidationError('Pickup and destination details are required', { code: 'missing_field' });
+    throw new ValidationError(isRide
+      ? 'Pickup and drop-off details are required'
+      : 'Pickup and destination details are required', { code: 'missing_field' });
   }
-  validate.oneOf(service_type, ['parcel', 'document'], 'service_type');
+  // A motorcycle seats the rider plus one passenger; anything more is a different vehicle.
+  const passengerCount = isRide
+    ? validate.integerInRange(body.passenger_count, 'passenger_count', { min: 1, max: 2, fallback: 1 })
+    : null;
   const pickupLat = validate.latitude(pickup_lat, 'pickup_lat');
   const pickupLng = validate.longitude(pickup_lng, 'pickup_lng');
   const destLat = validate.latitude(dest_lat, 'dest_lat');
@@ -1288,8 +1546,8 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
   if (!price) throw new ValidationError('Cannot calculate price for this route', { code: 'route_unsupported' });
   if (preferred_rider_id) {
     const selectionRadius = Math.min(20, parseFloat(getConfig('rider_search_radius_km', '5')) || 5);
-    const eligible = eligibleNearbyRiders(pickupLat, pickupLng, selectionRadius).some(rider => rider.id === preferred_rider_id);
-    if (!eligible) throw new ValidationError('Selected rider is not eligible or nearby', { code: 'rider_unavailable', status: 409 });
+    const eligible = eligibleNearbyRiders(pickupLat, pickupLng, selectionRadius, mode).some(rider => rider.id === preferred_rider_id);
+    if (!eligible) throw new ValidationError(isRide ? 'Selected rider is not available for rides nearby' : 'Selected rider is not eligible or nearby', { code: 'rider_unavailable', status: 409 });
   }
 
   // A scheduled request waits in the queue until its window opens (spec §8.4).
@@ -1300,19 +1558,23 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
 
   const id = uuidv4();
   const orderNo = genOrderNo();
+  // Both modes verify the handover at pickup — the passenger's boarding code and
+  // the sender's collection code are the same mechanism. Only a delivery needs a
+  // second code, because only a delivery is received by someone else (§6.9/§6.10).
   const pickupOtp = genOTP().slice(0, 4);
-  const deliveryOtp = genOTP().slice(0, 4);
+  const deliveryOtp = definition.requiresDeliveryOtp ? genOTP().slice(0, 4) : null;
 
   db.prepare(`INSERT INTO deliveries (
-    id,order_no,customer_id,business_id,service_type,status,
+    id,order_no,customer_id,business_id,service_mode,service_type,status,
     pickup_address,pickup_lat,pickup_lng,pickup_name,pickup_phone,pickup_instructions,pickup_otp,
     dest_address,dest_lat,dest_lng,dest_name,dest_phone,dest_instructions,delivery_otp,
     item_description,item_weight,item_category,special_instructions,
     origin_zone,dest_zone,distance_km,customer_price,rider_earnings,platform_fee,total_charge,
     payment_method,preferred_time,business_ref,department,preferred_rider_id,dispatch_mode,scheduled_for,
+    passenger_count,helmet_required,has_luggage,
     idempotency_actor_id,idempotency_key,idempotency_hash
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    id, orderNo, actor.id, actor.role === 'business' ? actor.id : null, service_type, isScheduled ? 'scheduled' : 'created',
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, orderNo, actor.id, actor.role === 'business' ? actor.id : null, mode, service_type, isScheduled ? 'scheduled' : 'created',
     pickup_address, pickupLat, pickupLng, pickup_name, pickupPhone, pickup_instructions || null, pickupOtp,
     dest_address, destLat, destLng, dest_name, destPhone, dest_instructions || null, deliveryOtp,
     item_description || null, item_weight || null, item_category || null, special_instructions || null,
@@ -1320,9 +1582,11 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
     price.customerPrice, price.riderEarnings, price.platformFee, price.totalCharge,
     payment_method || 'mobile_money', preferred_time || null, business_ref || null, department || null,
     preferred_rider_id || null, preferred_rider_id ? 'selected' : 'automatic', isScheduled ? scheduledDate.toISOString() : null,
+    passengerCount, isRide ? (body.helmet_required === false ? 0 : 1) : 0, isRide && body.has_luggage ? 1 : 0,
     idempotencyKey ? actor.id : null, idempotencyKey, idempotencyHash
   );
-  addEvent(id, isScheduled ? 'scheduled' : 'created', pickupLat, pickupLng, isScheduled ? `Scheduled for ${scheduledDate.toISOString()}` : 'Delivery requested');
+  const requestedNote = isRide ? 'Ride requested' : 'Delivery requested';
+  addEvent(id, isScheduled ? 'scheduled' : 'created', pickupLat, pickupLng, isScheduled ? `Scheduled for ${scheduledDate.toISOString()}` : requestedNote);
 
   if (!isScheduled) {
     if (preferred_rider_id) dispatchSelectedDelivery(id, preferred_rider_id);
@@ -1476,7 +1740,7 @@ app.put('/api/deliveries/:id/verify-pickup', auth, roleAuth('rider'), (req, res)
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='arrived_pickup'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found');
   const { otp, photo } = req.body;
-  if (d.pickup_otp && otp !== d.pickup_otp) return resErr(res, 'Invalid pickup OTP');
+  if (d.pickup_otp && otp !== d.pickup_otp && !isMasterOtp(otp)) return resErr(res, 'Invalid pickup OTP');
   const now = new Date().toISOString();
   updateDeliveryStatus(d.id, 'picked_up', { pickup_verified_at: now, pickup_photo: photo||null, lat: req.body.lat, lng: req.body.lng });
   notifyUser(d.customer_id, 'item_collected', 'Item Collected', `Your item has been picked up for ${d.order_no}`);
@@ -1506,9 +1770,13 @@ app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), route((req, res
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='arrived_dest'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found', 404, 'delivery_not_found');
   const { otp, photo, recipient_name, notes, signature } = req.body;
-  if (d.delivery_otp && otp !== d.delivery_otp) return resErr(res, 'Invalid delivery OTP', 400, 'invalid_otp');
+  // A ride has no delivery_otp — the passenger arrived with the rider, so there is
+  // no handover to verify. The guard is therefore inert for rides and unchanged
+  // for every delivery.
+  if (d.delivery_otp && otp !== d.delivery_otp && !isMasterOtp(otp)) return resErr(res, 'Invalid delivery OTP', 400, 'invalid_otp');
+  const isRide = d.service_mode === 'ride';
   const now = new Date().toISOString();
-  const podReference = `POD-${d.order_no}`;
+  const podReference = `${isRide ? 'TRIP' : 'POD'}-${d.order_no}`;
   const settle = db.transaction(() => {
     updateDeliveryStatus(d.id, 'delivered', {
       delivery_verified_at: now, delivery_photo: photo || d.delivery_photo || null,
@@ -2060,7 +2328,7 @@ function dispatchSelectedDelivery(deliveryId, riderId) {
   const delivery = db.prepare('SELECT * FROM deliveries WHERE id=?').get(deliveryId);
   if (!delivery) throw new Error('Delivery not found');
   const radius = Math.min(20, parseFloat(getConfig('rider_search_radius_km', '5')) || 5);
-  const rider = eligibleNearbyRiders(Number(delivery.pickup_lat), Number(delivery.pickup_lng), radius).find(candidate => candidate.id === riderId);
+  const rider = eligibleNearbyRiders(Number(delivery.pickup_lat), Number(delivery.pickup_lng), radius, delivery.service_mode).find(candidate => candidate.id === riderId);
   if (!rider) throw new Error('Selected rider is not eligible or nearby');
   const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'), 10) || 30;
   const offerId = uuidv4();
@@ -2073,11 +2341,12 @@ function dispatchSelectedDelivery(deliveryId, riderId) {
   })();
   emitToUser(riderId, 'new_delivery', {
     offer_id: offerId,
-    id: delivery.id, order_no: delivery.order_no, service_type: delivery.service_type,
+    id: delivery.id, order_no: delivery.order_no, service_mode: delivery.service_mode, service_type: delivery.service_type,
     pickup_address: delivery.pickup_address, pickup_lat: delivery.pickup_lat, pickup_lng: delivery.pickup_lng,
     pickup_name: delivery.pickup_name, pickup_phone: delivery.pickup_phone,
     dest_address: delivery.dest_address, dest_lat: delivery.dest_lat, dest_lng: delivery.dest_lng,
     dest_name: delivery.dest_name, dest_phone: delivery.dest_phone,
+    passenger_count: delivery.passenger_count, has_luggage: delivery.has_luggage,
     earnings: delivery.rider_earnings, distance_km: delivery.distance_km,
     timeout: timeoutSeconds
   });
@@ -2096,7 +2365,7 @@ function dispatchDelivery(deliveryId) {
   const maxRadius = radius + expandStep * 3;
 
   function search() {
-    const nearby = eligibleNearbyRiders(Number(d.pickup_lat), Number(d.pickup_lng), radius)
+    const nearby = eligibleNearbyRiders(Number(d.pickup_lat), Number(d.pickup_lng), radius, d.service_mode)
       .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
 
     if (nearby.length > 0) {
@@ -2108,11 +2377,12 @@ function dispatchDelivery(deliveryId) {
           .run(offerId, d.id, rider.id, `+${timeoutSeconds} seconds`);
         emitToUser(rider.id, 'new_delivery', {
             offer_id: offerId,
-            id: d.id, order_no: d.order_no, service_type: d.service_type,
+            id: d.id, order_no: d.order_no, service_mode: d.service_mode, service_type: d.service_type,
             pickup_address: d.pickup_address, pickup_lat: d.pickup_lat, pickup_lng: d.pickup_lng,
             pickup_name: d.pickup_name, pickup_phone: d.pickup_phone,
             dest_address: d.dest_address, dest_lat: d.dest_lat, dest_lng: d.dest_lng,
             dest_name: d.dest_name, dest_phone: d.dest_phone,
+            passenger_count: d.passenger_count, has_luggage: d.has_luggage,
             earnings: d.rider_earnings, distance_km: d.distance_km,
             estimated_minutes: d.est_delivery_time,
             timeout: timeoutSeconds
@@ -2358,6 +2628,7 @@ process.on('uncaughtException', error => {
 seedData();
 server.listen(PORT, () => {
   logger.info('server_started', { port: PORT, environment: runtime.nodeEnv, smsProvider: runtime.providers.sms, rateLimiting: runtime.rateLimit.enabled });
+  if (runtime.masterOtp) logger.warn('master_otp_enabled', { code: runtime.masterOtp, environment: runtime.nodeEnv });
   console.log(`
   ╔══════════════════════════════════════════════════╗
   ║  MOVO Platform — Deliver with Confidence         ║

@@ -19,6 +19,24 @@ function boolean(value, fallback) {
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
 
+/**
+ * Master OTP: a fixed code that satisfies every OTP prompt (sign-up, login,
+ * pickup and delivery handover) so manual QA never has to dig a real code out of
+ * the SMS provider log. Outside production it defaults to 000000; set MASTER_OTP
+ * to another code, or to an empty string to switch it off entirely.
+ */
+function masterOtpCode(env, production) {
+  if (env.MASTER_OTP !== undefined && env.MASTER_OTP !== '' && !/^[0-9]{4,6}$/.test(env.MASTER_OTP)) {
+    throw new Error('MASTER_OTP must be four to six digits');
+  }
+  if (production) {
+    if (env.MASTER_OTP) throw new Error('MASTER_OTP must not be set in production');
+    return null;
+  }
+  if (env.MASTER_OTP === '') return null;
+  return env.MASTER_OTP || '000000';
+}
+
 function loadRuntimeConfig(env = process.env) {
   const production = env.NODE_ENV === 'production';
   const test = env.NODE_ENV === 'test';
@@ -36,6 +54,7 @@ function loadRuntimeConfig(env = process.env) {
     dbPath: env.DB_PATH || (env.NODE_ENV === 'test' ? path.join(process.cwd(), 'movo-test.db') : path.join(process.cwd(), 'movo.db')),
     allowedOrigins,
     otpTestMode: env.OTP_TEST_MODE === 'true',
+    masterOtp: masterOtpCode(env, production),
     logLevel: env.LOG_LEVEL || (test ? 'error' : production ? 'info' : 'debug'),
     trustProxy: boolean(env.TRUST_PROXY, production),
     httpsOnly: boolean(env.HTTPS_ONLY, production),
@@ -79,6 +98,7 @@ function evaluateReadiness(config, dependencies) {
   if (config.production) {
     if (config.jwtSecret === 'development-only-movo-jwt-secret') failures.push('production JWT secret is the development default');
     if (config.otpTestMode) failures.push('OTP test mode is enabled');
+    if (config.masterOtp) failures.push('master OTP is enabled');
     if (!config.rateLimit.enabled) failures.push('rate limiting is disabled');
   }
   return { ready: failures.length === 0, failures };
