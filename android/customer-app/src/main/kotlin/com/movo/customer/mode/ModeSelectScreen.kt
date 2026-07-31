@@ -84,7 +84,7 @@ fun ModeSelectScreen(
                     selected = selected == MovoServiceMode.Delivery,
                     onSelect = { selected = MovoServiceMode.Delivery },
                     highlights = listOf(
-                        "Parcels and documents across Kigali",
+                        "Send without going yourself",
                         "Handover codes at pickup and delivery",
                         "Your receiver is kept updated by SMS"
                     )

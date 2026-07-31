@@ -99,9 +99,14 @@ fun MovoDeliveryStage.riderLabel(mode: MovoServiceMode): String {
     }
 }
 
-/** The seven progress checkpoints, worded for the mode. */
+/**
+ * The seven progress checkpoints, worded for the mode.
+ *
+ * Kept short: seven columns share the width of one phone, so a long word wraps to
+ * two lines and pushes the bar taller than the sheet can spare.
+ */
 fun trackedSteps(mode: MovoServiceMode): List<String> =
-    if (mode.isRide) listOf("Requested", "Matched", "Accepted", "Pickup", "On board", "Travelling", "Arrived")
+    if (mode.isRide) listOf("Booked", "Matched", "Accepted", "Pickup", "Aboard", "Moving", "Arrived")
     else MovoDeliveryStage.trackedSteps
 
 /** Human phrasing for a service type inside a mode: "Ride", "Parcel", "Document". */

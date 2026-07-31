@@ -207,7 +207,7 @@ private fun SplashScreen() {
         ) {
             Text("MOVO", style = MaterialTheme.typography.displaySmall, color = Color.White)
             Text(
-                "Deliver with Confidence",
+                "Ride and send with confidence",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Color.White.copy(alpha = 0.88f)
             )

@@ -102,13 +102,16 @@ fun DeliveryProgress(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(color))
                 Spacer(Modifier.height(MovoSpacing.tiny))
+                // Seven columns on a small phone leave ~50 dp per label, which
+                // clipped words like "Travelling" to "Travelli". Wrapping to a
+                // second line keeps every checkpoint readable in both products.
                 Text(
                     label,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (reached) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     textAlign = TextAlign.Center,
-                    overflow = TextOverflow.Clip
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

@@ -95,7 +95,7 @@ fun AuthScreen(
                     )
                     Text(
                         when (mode) {
-                            AuthMode.LOGIN -> "Sign in with your phone number to send and track deliveries."
+                            AuthMode.LOGIN -> "Sign in with your phone number to ride or send across Kigali."
                             AuthMode.REGISTER -> "We use your phone number to confirm deliveries and reach you about a parcel."
                             AuthMode.VERIFICATION -> "Enter the six-digit verification code we sent by SMS."
                         },
@@ -185,12 +185,12 @@ private fun AuthHero() {
         ) {
             Text("MOVO", style = MaterialTheme.typography.displaySmall, color = Color.White)
             Text(
-                "Deliver with Confidence",
+                "Ride and send with confidence",
                 style = MaterialTheme.typography.titleMedium,
                 color = Color.White
             )
             Text(
-                "Same-day parcel and document delivery across Kigali, handled by verified riders.",
+                "Moto rides and same-day parcel delivery across Kigali, handled by verified riders.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.88f)
             )
