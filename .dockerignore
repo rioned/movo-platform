@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+uploads
+movo.db
+movo.db-shm
+movo.db-wal
+android
+docs
+test
+.env
+.playwright-cli
+.superpowers

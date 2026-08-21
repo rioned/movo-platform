@@ -36,3 +36,4 @@ movo.db-wal
 # Local tooling artifacts
 .superpowers/
 .playwright-cli/
+.env
