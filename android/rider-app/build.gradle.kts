@@ -10,10 +10,18 @@ android {
     composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
     // Point a debug build at any MOVO server without editing this file:
     //   ./gradlew :rider-app:installDebug -PmovoApiBaseUrl=http://10.0.2.2:3000
-    val debugApiBaseUrl = (project.findProperty("movoApiBaseUrl") as String?) ?: "http://192.168.0.173:3000"
+    val debugApiBaseUrl = (project.findProperty("movoApiBaseUrl") as String?) ?: "https://192.168.0.200"
     buildTypes {
         debug { buildConfigField("String", "API_BASE_URL", "\"$debugApiBaseUrl\"") }
-        release { buildConfigField("String", "API_BASE_URL", "\"${project.findProperty("movoApiBaseUrl") ?: ""}\"") }
+        release {
+            // A release build with no (or non-https) API base URL would silently ship with
+            // cleartext or an empty endpoint — fail the build instead.
+            val releaseApiBaseUrl = project.findProperty("movoApiBaseUrl") as String?
+            if (releaseApiBaseUrl.isNullOrBlank() || !releaseApiBaseUrl.startsWith("https://")) {
+                error("movoApiBaseUrl must be set to an https:// URL for release builds, e.g. -PmovoApiBaseUrl=https://192.168.0.200 (got: ${releaseApiBaseUrl ?: "<unset>"})")
+            }
+            buildConfigField("String", "API_BASE_URL", "\"$releaseApiBaseUrl\"")
+        }
     }
 }
 

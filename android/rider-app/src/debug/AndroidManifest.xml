@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    Debug builds may point at any local MOVO server via -PmovoApiBaseUrl (see build.gradle.kts),
+    often a plain-HTTP LAN dev instance — permit cleartext only in this variant. Release stays
+    HTTPS-only; the merged manifest's network_security_config.xml still pins the production
+    host's CA and refuses cleartext to it even here.
+  -->
+  <application android:usesCleartextTraffic="true" />
+</manifest>

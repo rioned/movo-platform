@@ -13,6 +13,9 @@ android/**/build/incremental/
 *.dex
 *.class
 *.kotlin_module
+*.jks
+*.keystore
+*.p12
 
 # IDE files
 .idea/

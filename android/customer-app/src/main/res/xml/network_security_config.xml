@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The production backend's cert is self-signed (issued by Caddy's internal CA — no public
+  CA is possible without a domain name for this LAN deployment). Pin that specific CA for
+  that specific host so the connection stays validated, instead of the alternative of
+  disabling certificate checking app-wide. Cleartext to this host is always refused here,
+  regardless of the debug-only usesCleartextTraffic override in src/debug/AndroidManifest.xml.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">192.168.0.200</domain>
+        <trust-anchors>
+            <certificates src="@raw/movo_internal_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>
