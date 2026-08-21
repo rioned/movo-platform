@@ -1,0 +1,41 @@
+services:
+  voice-agent:
+    build: .
+    image: voice-agent:latest
+    container_name: voice-agent
+    restart: unless-stopped
+    # Host networking is the standard way to self-host LiveKit -- it also
+    # means only the host/VPS firewall (not docker -p) controls what's
+    # reachable, so:
+    #   - open to the internet: PUBLIC_PORT/tcp (Caddy, web UI, password-
+    #     gated), LIVEKIT_SIGNAL_PORT/tcp (Caddy, LiveKit signaling -- deliberately
+    #     its own origin with no basic_auth, see Caddyfile), 22/tcp (SSH),
+    #     80/tcp (Let's Encrypt ACME challenge + renewal, only needed if
+    #     PUBLIC_HOST is a real domain), 7881/tcp + UDP_PORT/udp (LiveKit
+    #     media -- not behind Caddy/basic_auth by nature of what it is)
+    #   - keep closed: 7880/tcp (livekit-server's direct HTTP/signaling
+    #     port -- Caddy already proxies the paths clients need from it)
+    #   - not applicable: 8000, 8082 -- these now bind 127.0.0.1 only in
+    #     the app itself, so they're unreachable from outside regardless
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      NODE_IP: ${NODE_IP}
+      PUBLIC_HOST: ${PUBLIC_HOST}
+      AGENT_MODE: ${AGENT_MODE:-dev}
+    volumes:
+      - kb_cache:/opt/voice-agent/kb_cache
+      # Persist Caddy's issued certs/ACME account across container restarts.
+      # Without this, every recreate wipes them and Caddy re-requests a
+      # fresh cert from Let's Encrypt from scratch -- a real outage window
+      # each time (no valid cert to serve until the new one lands) and,
+      # with enough restarts, a real risk of hitting Let's Encrypt's rate
+      # limits. No-op for the LAN/IP self-signed case, but harmless there too.
+      - caddy_data:/root/.local/share/caddy
+      - caddy_config:/root/.config/caddy
+
+volumes:
+  kb_cache:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,20 @@
+# Secrets -- never commit
+.env
+
+# Python virtualenv, reconstructable via requirements.txt
+venv/
+__pycache__/
+*.pyc
+
+# Runtime data / caches -- regenerated on start, not source
+kb_cache/
+*.log
+
+# Large model weights + third-party redistributed binaries -- not source,
+# and models/*.gguf and models/whisper/*/model.bin exceed GitHub's 100MB
+# file limit. See README.md for how to obtain them.
+models/
+piper/
+
+# Sample audio output from manual testing
+*.wav

@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.log
+*.wav
+.env
+kb_cache/
+test_*.py
+pw_top*.js
+pw_top*.py
+ptytest.py
+trending.py
+trending_news.py
+voice-agent-documentation.pdf
+.git

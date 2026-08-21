@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>I.S.H.E.M.A — Local Voice Agent</title>
+<link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #03060a;
+    --cyan: #5df1ff;
+    --cyan-bright: #baffff;
+    --cyan-dim: rgba(93, 241, 255, 0.35);
+    --amber: #ffb454;
+    --red: #ff5c6a;
+    --panel-bg: rgba(8, 20, 28, 0.6);
+    --panel-border: rgba(93, 241, 255, 0.28);
+    --text: #d7f6ff;
+    --muted: #6f93a0;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at 50% 30%, #071019 0%, var(--bg) 65%, #000 100%);
+    color: var(--text);
+    font-family: "Share Tech Mono", monospace;
+  }
+  body {
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  #scene {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .grid-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(93, 241, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(93, 241, 255, 0.05) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse at 50% 40%, black 0%, transparent 72%);
+  }
+
+  .scanlines {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.015) 0px,
+      rgba(255, 255, 255, 0.015) 1px,
+      transparent 2px,
+      transparent 3px
+    );
+    opacity: 0.6;
+  }
+
+  /* --------------------------------------------------------------- */
+  /* Main surface: 3D orb + transcript only. Whole area is tap-to-talk */
+  /* --------------------------------------------------------------- */
+  .stage {
+    position: relative;
+    z-index: 3;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 24px;
+  }
+
+  .reticle {
+    position: relative;
+    width: min(52vh, 60vw, 420px);
+    height: min(52vh, 60vw, 420px);
+    flex-shrink: 0;
+  }
+  .corner {
+    position: absolute;
+    width: 26px;
+    height: 26px;
+    border: 1.5px solid var(--cyan-dim);
+    opacity: 0.7;
+  }
+  .corner.tl { top: -14px; left: -14px; border-right: none; border-bottom: none; }
+  .corner.tr { top: -14px; right: -14px; border-left: none; border-bottom: none; }
+  .corner.bl { bottom: -14px; left: -14px; border-right: none; border-top: none; }
+  .corner.br { bottom: -14px; right: -14px; border-left: none; border-top: none; }
+
+  .orb-caption {
+    position: absolute;
+    bottom: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    letter-spacing: 0.32em;
+    color: var(--muted);
+    white-space: nowrap;
+    transition: color 200ms ease;
+  }
+  .orb-caption.hint { color: var(--cyan); animation: pulse-hint 1.8s ease-in-out infinite; }
+  @keyframes pulse-hint { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+  .stage.pressed .reticle { transform: scale(0.96); }
+  .reticle { transition: transform 90ms ease; }
+
+  .transcript-panel {
+    position: relative;
+    z-index: 4;
+    width: min(640px, 92vw);
+    max-height: 22vh;
+    margin-top: 26px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.35), inset 0 0 40px rgba(93, 241, 255, 0.03);
+    clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+    cursor: default;
+    display: flex;
+    flex-direction: column;
+  }
+  .transcript {
+    padding: 8px 16px 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .transcript::-webkit-scrollbar { width: 6px; }
+  .transcript::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 3px; }
+  .line { font-size: 12px; line-height: 1.42; }
+  .line .who { color: var(--muted); letter-spacing: 0.1em; margin-right: 7px; }
+  .line.agent .who { color: var(--cyan); }
+  .line.user .who { color: var(--amber); }
+  .line.agent { color: var(--cyan-bright); text-shadow: 0 0 6px rgba(93, 241, 255, 0.25); }
+  .line.user { color: var(--text); }
+  .empty-hint { color: var(--muted); font-size: 11.5px; padding: 4px 0; }
+
+  /* --------------------------------------------------------------- */
+  /* Settings gear + drawer (everything else lives here)              */
+  /* --------------------------------------------------------------- */
+  .icon-btn {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 20;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--cyan-bright);
+    transition: box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease;
+  }
+  .icon-btn:hover { border-color: var(--cyan); box-shadow: 0 0 14px rgba(93, 241, 255, 0.3); }
+  .icon-btn:active { transform: scale(0.93); }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .icon-btn .status-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 0 6px var(--muted);
+    border: 1.5px solid #03060a;
+  }
+  .status-dot.connecting { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: blink 0.9s infinite; }
+  .status-dot.listening, .status-dot.speaking { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+  .status-dot.error { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  @keyframes blink { 50% { opacity: 0.25; } }
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    background: rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+  }
+  .backdrop.open { opacity: 1; pointer-events: auto; }
+
+  .settings-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 18;
+    height: 100%;
+    width: min(340px, 88vw);
+    background: rgba(6, 14, 20, 0.92);
+    border-left: 1px solid var(--panel-border);
+    backdrop-filter: blur(14px);
+    box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
+    transform: translateX(100%);
+    transition: transform 220ms ease;
+    overflow-y: auto;
+    padding: 70px 20px 24px;
+    cursor: default;
+  }
+  .settings-panel.open { transform: translateX(0); }
+
+  .brand {
+    font-family: "Orbitron", sans-serif;
+    font-weight: 900;
+    font-size: 18px;
+    letter-spacing: 0.1em;
+    color: var(--cyan-bright);
+    text-shadow: 0 0 12px var(--cyan-dim);
+  }
+  .brand-sub {
+    display: block;
+    font-weight: 400;
+    font-size: 9.5px;
+    letter-spacing: 0.24em;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin: 16px 0 18px;
+    padding: 8px 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: 999px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 6px var(--muted); }
+  .dot.connecting { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: blink 0.9s infinite; }
+  .dot.listening, .dot.speaking { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+  .dot.error { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.28em;
+    color: var(--cyan);
+    opacity: 0.75;
+    margin: 20px 0 8px;
+  }
+
+  .settings-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  select, input[type="password"], input[type="text"], textarea {
+    flex: 1;
+    background: rgba(3, 10, 14, 0.7);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 3px;
+    padding: 9px 9px;
+    font-size: 12px;
+    font-family: "Share Tech Mono", monospace;
+    outline: none;
+    width: 100%;
+  }
+  textarea { resize: vertical; line-height: 1.4; margin-bottom: 8px; }
+  select:focus, input:focus, textarea:focus { border-color: var(--cyan); box-shadow: 0 0 8px rgba(93, 241, 255, 0.25); }
+  .hint { color: var(--muted); font-size: 10.5px; line-height: 1.4; margin-bottom: 4px; }
+
+  .controls { display: flex; gap: 8px; margin-top: 14px; }
+  button {
+    appearance: none;
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--cyan-bright);
+    border-radius: 3px;
+    padding: 11px 10px;
+    font-family: "Share Tech Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  button:hover:not(:disabled) {
+    border-color: var(--cyan);
+    box-shadow: 0 0 14px rgba(93, 241, 255, 0.28);
+    background: rgba(93, 241, 255, 0.06);
+  }
+  button:active:not(:disabled) { transform: scale(0.97); }
+  button:disabled { opacity: 0.3; cursor: not-allowed; }
+  #disconnectBtn { border-color: var(--red); color: var(--red); }
+  #disconnectBtn:hover:not(:disabled) { box-shadow: 0 0 14px rgba(255, 92, 106, 0.3); background: rgba(255, 92, 106, 0.08); }
+
+  .close-btn {
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 1px solid var(--panel-border);
+    background: transparent;
+    color: var(--cyan-bright);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 0;
+    flex: none;
+  }
+  .close-btn:hover { border-color: var(--cyan); box-shadow: 0 0 10px rgba(93, 241, 255, 0.3); }
+
+  @media (max-width: 520px), (max-height: 700px) {
+    .reticle { width: min(42vh, 68vw, 300px); height: min(42vh, 68vw, 300px); }
+    .orb-caption { bottom: -24px; font-size: 10px; }
+    .transcript-panel { max-height: 26vh; margin-top: 18px; }
+    .settings-panel { padding-top: 64px; }
+  }
+</style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div class="grid-overlay"></div>
+  <div class="scanlines"></div>
+
+  <!-- entire stage is the tap-to-talk zone -->
+  <div class="stage" id="stage">
+    <div class="reticle">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <span class="orb-caption hint" id="orbCaption">TAP TO ENGAGE</span>
+    </div>
+
+    <div class="panel transcript-panel" id="transcriptPanel">
+      <div class="transcript" id="transcript">
+        <div class="empty-hint">// awaiting connection...</div>
+      </div>
+    </div>
+  </div>
+
+  <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+    <span class="status-dot" id="statusDot"></span>
+  </button>
+
+  <div class="backdrop" id="backdrop"></div>
+
+  <div class="settings-panel" id="settingsPanel">
+    <button class="close-btn" id="closeSettingsBtn" aria-label="Close">&#10005;</button>
+
+    <div class="brand">I.S.H.E.M.A<span class="brand-sub">LOCAL VOICE INTELLIGENCE // OFFLINE-CAPABLE</span></div>
+
+    <div class="status-row"><span class="dot" id="statusDotPanel"></span><span id="statusText">STANDBY</span></div>
+
+    <div class="section-label">LLM PROVIDER</div>
+    <div class="settings-row">
+      <select id="providerSelect">
+        <option value="local" selected>LOCAL LLM (OFFLINE)</option>
+        <option value="api">OPENAI-COMPATIBLE API</option>
+        <option value="hermes">HERMES AGENT (LOCAL, AUTONOMOUS)</option>
+      </select>
+    </div>
+    <div class="settings-row" id="apiFields">
+      <input id="baseUrlInput" type="text" placeholder="Base URL" value="https://api.deepseek.com" />
+    </div>
+    <div class="settings-row" id="apiFields2">
+      <input id="modelInput" type="text" placeholder="Model" value="deepseek-v4-flash" />
+    </div>
+    <div class="settings-row" id="apiKeyRow">
+      <input
+        id="apiKeyInput"
+        type="password"
+        placeholder="API key (sk-...)"
+      />
+    </div>
+    <div class="hint" id="providerHint">Speech still runs locally; only text goes to the API.</div>
+
+    <div class="section-label">PERSONALITY</div>
+    <div class="settings-row">
+      <select id="personalitySelect">
+        <option value="general" selected>General Assistant</option>
+        <option value="hospitality">Hospitality / Concierge</option>
+        <option value="tech_support">Technical Support</option>
+        <option value="sales">Sales Assistant</option>
+        <option value="customer_service">Customer Service</option>
+      </select>
+    </div>
+    <textarea id="instructionsInput" rows="6"></textarea>
+    <div class="hint">Pick a template to start from, then edit the text above freely -- it's sent to the agent as-is.</div>
+
+    <div class="section-label">KNOWLEDGE BASE (RAG)</div>
+    <div class="settings-row">
+      <input id="knowledgeUrlInput" type="text" placeholder="https://example.com/page-to-learn" />
+    </div>
+    <div class="controls" style="margin-top: 0">
+      <button id="fetchKbBtn" type="button">Fetch &amp; Index</button>
+    </div>
+    <div class="hint" id="kbStatus">Optional: scrape a page so the agent can answer questions about it.</div>
+
+    <div class="section-label">VOICE MODELS</div>
+    <div class="settings-row">
+      <select id="whisperModelSelect"><option value="">(loading...)</option></select>
+    </div>
+    <div class="settings-row">
+      <select id="ttsVoiceSelect"><option value="">(loading...)</option></select>
+    </div>
+    <div class="hint">Whisper model (speech-to-text accuracy/speed) and Piper voice (text-to-speech), picked from what's installed under models/ on the server.</div>
+
+    <div class="section-label">CONTROLS</div>
+    <div class="hint">Tap anywhere on the main screen to start or stop the conversation.</div>
+    <div class="controls">
+      <button id="muteBtn" disabled>Mute</button>
+      <button id="disconnectBtn" disabled>Disconnect</button>
+    </div>
+  </div>
+
+  <audio id="remoteAudio" autoplay></audio>
+
+  <script>
+    /* ---------------------------------------------------------------- */
+    /* 3D core — Three.js audio-reactive orb                             */
+    /* ---------------------------------------------------------------- */
+    const canvas = document.getElementById("scene");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0, 5.2);
+
+    const COLORS = {
+      idle: new THREE.Color(0x2a5560),
+      connecting: new THREE.Color(0xffb454),
+      listening: new THREE.Color(0x5df1ff),
+      speaking: new THREE.Color(0xbaffff),
+      error: new THREE.Color(0xff5c6a),
+    };
+
+    const core = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(1.25, 1),
+      new THREE.MeshBasicMaterial({ color: COLORS.idle, wireframe: true, transparent: true, opacity: 0.85 })
+    );
+    scene.add(core);
+
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.85, 32, 32),
+      new THREE.MeshBasicMaterial({
+        color: COLORS.idle,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    scene.add(glow);
+
+    const rings = [];
+    const ringDefs = [
+      { r: 1.9, tube: 0.008, tilt: [Math.PI / 2.3, 0, 0], speed: 0.006 },
+      { r: 2.15, tube: 0.006, tilt: [Math.PI / 3.1, Math.PI / 4, 0], speed: -0.004 },
+      { r: 2.4, tube: 0.005, tilt: [Math.PI / 5, -Math.PI / 3, 0], speed: 0.0025 },
+    ];
+    for (const def of ringDefs) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(def.r, def.tube, 8, 128),
+        new THREE.MeshBasicMaterial({ color: COLORS.idle, transparent: true, opacity: 0.5 })
+      );
+      ring.rotation.set(...def.tilt);
+      ring.userData.speed = def.speed;
+      scene.add(ring);
+      rings.push(ring);
+    }
+
+    const PARTICLE_COUNT = 260;
+    const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const r = 2.7 + Math.random() * 0.9;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      particlePositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      particlePositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      particlePositions[i * 3 + 2] = r * Math.cos(phi);
+    }
+    const particleGeo = new THREE.BufferGeometry();
+    particleGeo.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
+    const particles = new THREE.Points(
+      particleGeo,
+      new THREE.PointsMaterial({
+        color: COLORS.idle,
+        size: 0.02,
+        transparent: true,
+        opacity: 0.55,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    scene.add(particles);
+
+    let currentState = "idle";
+    let audioLevel = 0; // smoothed 0..1
+    let targetColor = COLORS.idle.clone();
+
+    function setVisualState(state) {
+      currentState = state;
+      targetColor = COLORS[state] || COLORS.idle;
+    }
+
+    const clockT = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const t = clockT.getElapsedTime();
+
+      // breathing baseline + audio-reactive boost
+      const breathing = 0.5 + 0.5 * Math.sin(t * (currentState === "connecting" ? 3.2 : 1.1));
+      const level = currentState === "speaking" || currentState === "listening" ? audioLevel : 0;
+      const drive = Math.max(breathing * 0.25, level);
+
+      core.rotation.y += 0.0022 + level * 0.01;
+      core.rotation.x += 0.0009;
+      const coreScale = 1 + drive * 0.18;
+      core.scale.setScalar(coreScale);
+
+      glow.scale.setScalar(1 + drive * 0.55);
+      glow.material.opacity = 0.25 + drive * 0.45;
+
+      for (const ring of rings) {
+        ring.rotation.z += ring.userData.speed * (1 + level * 4);
+        ring.material.opacity = 0.35 + drive * 0.35;
+      }
+
+      particles.rotation.y += 0.0006 + level * 0.002;
+      particles.rotation.x += 0.0002;
+      particles.material.size = 0.018 + level * 0.02;
+
+      // smooth color lerp toward target
+      core.material.color.lerp(targetColor, 0.06);
+      glow.material.color.lerp(targetColor, 0.06);
+      particles.material.color.lerp(targetColor, 0.06);
+      for (const ring of rings) ring.material.color.lerp(targetColor, 0.06);
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    /* ---------------------------------------------------------------- */
+    /* Web Audio analysers (drive audioLevel from real mic / agent audio) */
+    /* ---------------------------------------------------------------- */
+    let audioCtx = null;
+    let agentAnalyser = null;
+    let micAnalyser = null;
+    let activeAnalyser = null;
+
+    function ensureAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    function makeAnalyser(mediaStreamTrack) {
+      const ctx = ensureAudioCtx();
+      const stream = new MediaStream([mediaStreamTrack]);
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      return analyser;
+    }
+
+    function sampleLevel(analyser) {
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i];
+      return Math.min(1, (sum / data.length / 255) * 2.2);
+    }
+
+    setInterval(() => {
+      if (activeAnalyser) {
+        audioLevel = audioLevel * 0.6 + sampleLevel(activeAnalyser) * 0.4;
+      } else {
+        audioLevel = audioLevel * 0.85;
+      }
+    }, 45);
+
+    /* ---------------------------------------------------------------- */
+    /* LiveKit connection logic                                          */
+    /* ---------------------------------------------------------------- */
+    const { Room, RoomEvent, Track } = LivekitClient;
+
+    const stage = document.getElementById("stage");
+    const settingsBtn = document.getElementById("settingsBtn");
+    const closeSettingsBtn = document.getElementById("closeSettingsBtn");
+    const settingsPanel = document.getElementById("settingsPanel");
+    const backdrop = document.getElementById("backdrop");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+    const muteBtn = document.getElementById("muteBtn");
+    const statusDot = document.getElementById("statusDot"); // gear badge
+    const statusDotPanel = document.getElementById("statusDotPanel"); // panel row
+    const statusText = document.getElementById("statusText");
+    const orbCaption = document.getElementById("orbCaption");
+    const transcriptEl = document.getElementById("transcript");
+    const transcriptPanel = document.getElementById("transcriptPanel");
+    const remoteAudio = document.getElementById("remoteAudio");
+    const providerSelect = document.getElementById("providerSelect");
+    const apiFields = document.getElementById("apiFields");
+    const apiFields2 = document.getElementById("apiFields2");
+    const apiKeyRow = document.getElementById("apiKeyRow");
+    const baseUrlInput = document.getElementById("baseUrlInput");
+    const modelInput = document.getElementById("modelInput");
+    const apiKeyInput = document.getElementById("apiKeyInput");
+    const providerHint = document.getElementById("providerHint");
+    const apiInputs = [baseUrlInput, modelInput, apiKeyInput];
+    const personalitySelect = document.getElementById("personalitySelect");
+    const instructionsInput = document.getElementById("instructionsInput");
+    const knowledgeUrlInput = document.getElementById("knowledgeUrlInput");
+    const fetchKbBtn = document.getElementById("fetchKbBtn");
+    const kbStatus = document.getElementById("kbStatus");
+    const whisperModelSelect = document.getElementById("whisperModelSelect");
+    const ttsVoiceSelect = document.getElementById("ttsVoiceSelect");
+
+    let room = null;
+    let muted = false;
+
+    /* ---- populate whisper/piper model pickers from what's actually on disk ---- */
+    function fillSelect(select, names, preferred) {
+      select.innerHTML = "";
+      if (!names.length) {
+        select.innerHTML = '<option value="">(none found)</option>';
+        return;
+      }
+      for (const name of names) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        if (name === preferred) opt.selected = true;
+        select.appendChild(opt);
+      }
+    }
+    fetch("/models")
+      .then((r) => r.json())
+      .then((data) => {
+        fillSelect(whisperModelSelect, data.whisper || [], "small.en");
+        fillSelect(ttsVoiceSelect, data.piper || [], "en_US-lessac-medium");
+      })
+      .catch((err) => {
+        console.error("failed to load /models", err);
+        whisperModelSelect.innerHTML = '<option value="">(failed to load)</option>';
+        ttsVoiceSelect.innerHTML = '<option value="">(failed to load)</option>';
+      });
+
+    const PROVIDER_HINTS = {
+      local: "Runs entirely offline on this machine — no data leaves the box.",
+      api: "Speech still runs locally; only the text goes to the API endpoint below.",
+      hermes:
+        "Runs the Hermes autonomous agent (tools, skills, memory) installed on this " +
+        "machine instead of a direct LLM call. Slower per reply (~5-10s) since it's " +
+        "a full agentic loop, not a simple completion.",
+    };
+
+    /* ---- personality templates ---- */
+    const PERSONALITY_TEMPLATES = {
+      general:
+        "You are a helpful, friendly voice assistant. Keep responses concise, " +
+        "ideally under 2 sentences, since they will be spoken aloud.",
+      hospitality:
+        "You are a warm, gracious hospitality concierge -- think five-star hotel " +
+        "front desk. Greet guests kindly, anticipate their needs, and speak with " +
+        "polished, welcoming warmth. Keep replies concise (1-2 sentences, spoken " +
+        "aloud) and always offer a next helpful step (directions, reservations, " +
+        "recommendations).",
+      tech_support:
+        "You are a calm, precise technical support specialist. Diagnose issues " +
+        "methodically, ask one clarifying question at a time when needed, and " +
+        "give clear, actionable steps. Avoid jargon unless the user uses it first. " +
+        "Keep replies concise (1-2 sentences, spoken aloud).",
+      sales:
+        "You are an enthusiastic, persuasive but honest sales assistant. Highlight " +
+        "benefits relevant to what the user asks about, create genuine excitement, " +
+        "and gently guide toward a next step (a purchase, a demo, a question " +
+        "answered) without being pushy. Keep replies concise (1-2 sentences, " +
+        "spoken aloud).",
+      customer_service:
+        "You are an empathetic, patient customer service representative. " +
+        "Acknowledge the user's concern first, stay calm and solution-oriented, " +
+        "and keep a professional, reassuring tone even if they're frustrated. " +
+        "Keep replies concise (1-2 sentences, spoken aloud).",
+    };
+    personalitySelect.addEventListener("change", () => {
+      instructionsInput.value = PERSONALITY_TEMPLATES[personalitySelect.value] || "";
+    });
+    instructionsInput.value = PERSONALITY_TEMPLATES.general;
+
+    /* ---- knowledge-base (RAG) fetch ---- */
+    fetchKbBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const url = knowledgeUrlInput.value.trim();
+      if (!url) {
+        kbStatus.textContent = "Enter a URL first.";
+        return;
+      }
+      fetchKbBtn.disabled = true;
+      kbStatus.textContent = "Fetching & indexing...";
+      try {
+        const resp = await fetch("/scrape", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `request failed (${resp.status})`);
+        kbStatus.textContent = `✓ Indexed ${data.num_chunks} chunk(s) from ${data.url}`;
+      } catch (err) {
+        kbStatus.textContent = "Failed: " + err.message;
+      } finally {
+        fetchKbBtn.disabled = false;
+      }
+    });
+    const CAPTIONS = {
+      idle: "TAP TO ENGAGE",
+      connecting: "ESTABLISHING LINK...",
+      listening: "LISTENING // TAP TO STOP",
+      speaking: "RESPONDING // TAP TO STOP",
+      error: "LINK FAILURE // TAP TO RETRY",
+    };
+
+    /* ---- settings drawer open/close ---- */
+    function openSettings() {
+      settingsPanel.classList.add("open");
+      backdrop.classList.add("open");
+    }
+    function closeSettings() {
+      settingsPanel.classList.remove("open");
+      backdrop.classList.remove("open");
+    }
+    settingsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      settingsPanel.classList.contains("open") ? closeSettings() : openSettings();
+    });
+    closeSettingsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeSettings();
+    });
+    backdrop.addEventListener("click", closeSettings);
+    settingsPanel.addEventListener("click", (e) => e.stopPropagation());
+
+    providerSelect.addEventListener("change", () => {
+      const isApi = providerSelect.value === "api";
+      apiFields.style.display = isApi ? "flex" : "none";
+      apiFields2.style.display = isApi ? "flex" : "none";
+      apiKeyRow.style.display = isApi ? "flex" : "none";
+      providerHint.textContent = PROVIDER_HINTS[providerSelect.value];
+    });
+
+    function setStatus(kind, text, caption) {
+      const dotClass = "dot " + kind;
+      statusDotPanel.className = dotClass;
+      statusDot.className = "status-dot " + kind;
+      statusText.textContent = text;
+      setVisualState(kind || "idle");
+      const isIdle = kind === "idle" || !kind;
+      orbCaption.classList.toggle("hint", isIdle);
+      if (caption) orbCaption.textContent = caption;
+      else orbCaption.textContent = CAPTIONS[kind] || CAPTIONS.idle;
+    }
+
+    function addLine(who, text) {
+      const hint = transcriptEl.querySelector(".empty-hint");
+      if (hint) hint.remove();
+      const div = document.createElement("div");
+      div.className = "line " + (who === "agent" ? "agent" : "user");
+      const stamp = new Date().toLocaleTimeString("en-GB", { hour12: false });
+      div.innerHTML = `<span class="who">[${stamp}] ${who}</span>${text}`;
+      transcriptEl.appendChild(div);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      return div;
+    }
+
+    let connecting = false;
+
+    const extraInputs = [
+      personalitySelect,
+      instructionsInput,
+      knowledgeUrlInput,
+      fetchKbBtn,
+      whisperModelSelect,
+      ttsVoiceSelect,
+    ];
+
+    async function connect() {
+      const provider = providerSelect.value;
+      const apiKey = apiKeyInput.value.trim();
+      const baseUrl = baseUrlInput.value.trim();
+      const model = modelInput.value.trim();
+      const instructions = instructionsInput.value.trim();
+      const knowledgeUrl = knowledgeUrlInput.value.trim();
+      const whisperModel = whisperModelSelect.value;
+      const ttsVoice = ttsVoiceSelect.value;
+      if (provider === "api" && !apiKey) {
+        setStatus("error", "NO API KEY", "NO API KEY // OPEN SETTINGS");
+        openSettings();
+        return;
+      }
+
+      connecting = true;
+      providerSelect.disabled = true;
+      apiInputs.forEach((el) => (el.disabled = true));
+      extraInputs.forEach((el) => (el.disabled = true));
+      setStatus("connecting", "CONNECTING...");
+      try {
+        ensureAudioCtx();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+
+        const resp = await fetch("/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: `web-${Math.random().toString(36).slice(2, 8)}`,
+            provider,
+            api_key: apiKey,
+            base_url: baseUrl,
+            model,
+            instructions,
+            knowledge_url: knowledgeUrl,
+            whisper_model: whisperModel,
+            tts_voice: ttsVoice,
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `token request failed (${resp.status})`);
+        const { url, token } = data;
+
+        room = new Room({ adaptiveStream: true, dynacast: true });
+
+        room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+          if (track.kind === Track.Kind.Audio) {
+            track.attach(remoteAudio);
+            if (participant.identity.startsWith("agent")) {
+              agentAnalyser = makeAnalyser(track.mediaStreamTrack);
+            }
+          }
+        });
+        room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+          const agentSpeaking = speakers.some((p) => p.identity.startsWith("agent"));
+          if (agentSpeaking && agentAnalyser) {
+            activeAnalyser = agentAnalyser;
+            setStatus("speaking", `CONNECTED // ${room.localParticipant.identity}`);
+          } else if (room && room.state === "connected") {
+            activeAnalyser = micAnalyser;
+            setStatus("listening", `CONNECTED // ${room.localParticipant.identity}`);
+          }
+        });
+        room.on(RoomEvent.Disconnected, () => onDisconnected());
+
+        // live captions for both the user's recognized speech and the agent's replies
+        room.registerTextStreamHandler("lk.transcription", async (reader, participantInfo) => {
+          let lineEl = null;
+          const who = participantInfo.identity.startsWith("agent") ? "AGENT" : "YOU";
+          for await (const chunk of reader) {
+            if (!lineEl) lineEl = addLine(who, "");
+            const stamp = lineEl.querySelector(".who").textContent;
+            lineEl.innerHTML = `<span class="who">${stamp}</span>${chunk}`;
+            transcriptEl.scrollTop = transcriptEl.scrollHeight;
+          }
+        });
+
+        await room.connect(url, token);
+        await room.localParticipant.setMicrophoneEnabled(true);
+
+        const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+        if (micPub && micPub.track) {
+          micAnalyser = makeAnalyser(micPub.track.mediaStreamTrack);
+          activeAnalyser = micAnalyser;
+        }
+
+        setStatus("listening", `CONNECTED // ${room.localParticipant.identity}`);
+        disconnectBtn.disabled = false;
+        muteBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        setStatus("error", "FAILED: " + err.message, "FAILED // TAP TO RETRY");
+        providerSelect.disabled = false;
+        apiInputs.forEach((el) => (el.disabled = false));
+        extraInputs.forEach((el) => (el.disabled = false));
+      } finally {
+        connecting = false;
+      }
+    }
+
+    function onDisconnected() {
+      setStatus("idle", "STANDBY");
+      disconnectBtn.disabled = true;
+      muteBtn.disabled = true;
+      providerSelect.disabled = false;
+      apiInputs.forEach((el) => (el.disabled = false));
+      extraInputs.forEach((el) => (el.disabled = false));
+      muted = false;
+      muteBtn.textContent = "Mute";
+      activeAnalyser = null;
+      agentAnalyser = null;
+      micAnalyser = null;
+      room = null;
+    }
+
+    async function toggleConversation() {
+      if (connecting) return;
+      if (room) {
+        await room.disconnect();
+        onDisconnected();
+      } else {
+        await connect();
+      }
+    }
+
+    // tap/click anywhere on the main stage (orb + empty space) toggles
+    // start/stop -- but not clicks inside the transcript panel (so users
+    // can scroll/select text) or the settings gear/drawer.
+    stage.addEventListener("click", (e) => {
+      if (e.target.closest("#transcriptPanel")) return;
+      toggleConversation();
+    });
+    stage.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#transcriptPanel")) return;
+      stage.classList.add("pressed");
+    });
+    ["pointerup", "pointerleave", "pointercancel"].forEach((ev) =>
+      stage.addEventListener(ev, () => stage.classList.remove("pressed"))
+    );
+
+    disconnectBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (room) await room.disconnect();
+      onDisconnected();
+    });
+
+    muteBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!room) return;
+      muted = !muted;
+      await room.localParticipant.setMicrophoneEnabled(!muted);
+      muteBtn.textContent = muted ? "Unmute" : "Mute";
+      if (muted) activeAnalyser = null;
+      else if (room.state === "connected") activeAnalyser = micAnalyser;
+    });
+
+    // initial UI state for the api-provider fields (matches default selection)
+    providerSelect.dispatchEvent(new Event("change"));
+    setStatus("idle", "STANDBY");
+  </script>
+</body>
+</html>

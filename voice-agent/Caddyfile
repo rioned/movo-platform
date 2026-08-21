@@ -1,0 +1,40 @@
+{
+	auto_https disable_redirects
+}
+
+# Web UI + token/RAG API: password-gated.
+https://{$PUBLIC_HOST}:{$PUBLIC_PORT:8443}, https://localhost:{$PUBLIC_PORT:8443} {
+	# No explicit `tls` directive on purpose: Caddy's automatic HTTPS already
+	# does the right thing per PUBLIC_HOST on its own -- a real public domain
+	# (VPS deploy) gets a trusted Let's Encrypt/ZeroSSL cert automatically,
+	# while an IP address (LAN test deploy) automatically falls back to its
+	# internal self-signed CA, since a public CA can't issue for a bare IP.
+	basic_auth {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	reverse_proxy localhost:8082
+}
+
+# LiveKit signaling (WebSocket): deliberately a SEPARATE origin (different
+# port, same host) from the block above, with NO basic_auth anywhere on it.
+#
+# This isn't an optional simplification -- it's required. Browsers refuse
+# ALL WebSocket connections to an origin that has ever presented an HTTP
+# Basic-Auth challenge, even to paths explicitly excluded from basic_auth
+# via a Caddy matcher: the restriction is enforced client-side, per-origin,
+# not per-path. (Confirmed the hard way: curl, raw `websockets`, and
+# LiveKit's own Python SDK all connected fine through the old shared-origin
+# setup with a matcher exclusion -- none of them carry this browser
+# restriction -- while every real browser failed identically with
+# "HTTP Authentication failed; no valid credentials available", regardless
+# of the exclusion. Splitting the origin is the only fix; it's not
+# something a Caddyfile matcher on a single origin can work around.)
+#
+# Still safe without basic_auth: the only way to obtain a valid LiveKit
+# access_token is /token on the block above, which IS behind the password,
+# and LiveKit independently validates that JWT for every connection here
+# regardless of Caddy's auth.
+https://{$PUBLIC_HOST}:{$LIVEKIT_SIGNAL_PORT:8444}, https://localhost:{$LIVEKIT_SIGNAL_PORT:8444} {
+	reverse_proxy localhost:7880
+}
