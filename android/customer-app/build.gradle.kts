@@ -10,7 +10,7 @@ android {
     composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
     // Point a debug build at any MOVO server without editing this file:
     //   ./gradlew :customer-app:installDebug -PmovoApiBaseUrl=http://10.0.2.2:3000
-    val debugApiBaseUrl = (project.findProperty("movoApiBaseUrl") as String?) ?: "https://192.168.0.200"
+    val debugApiBaseUrl = (project.findProperty("movoApiBaseUrl") as String?) ?: "https://movo-vervice.tech"
     buildTypes {
         debug { buildConfigField("String", "API_BASE_URL", "\"$debugApiBaseUrl\"") }
         release {
@@ -18,7 +18,7 @@ android {
             // cleartext or an empty endpoint — fail the build instead.
             val releaseApiBaseUrl = project.findProperty("movoApiBaseUrl") as String?
             if (releaseApiBaseUrl.isNullOrBlank() || !releaseApiBaseUrl.startsWith("https://")) {
-                error("movoApiBaseUrl must be set to an https:// URL for release builds, e.g. -PmovoApiBaseUrl=https://192.168.0.200 (got: ${releaseApiBaseUrl ?: "<unset>"})")
+                error("movoApiBaseUrl must be set to an https:// URL for release builds, e.g. -PmovoApiBaseUrl=https://movo-vervice.tech (got: ${releaseApiBaseUrl ?: "<unset>"})")
             }
             buildConfigField("String", "API_BASE_URL", "\"$releaseApiBaseUrl\"")
         }
