@@ -3,7 +3,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# pm2 is unused here (the container is supervised by Docker's own restart policy, not pm2),
+# and its bundled js-yaml carries an unpatched high-severity CVE — drop it from the image.
+RUN npm ci --omit=dev && npm remove pm2
 
 FROM node:24-bookworm-slim
 WORKDIR /app

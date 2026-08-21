@@ -38,13 +38,16 @@ const metrics = createMetrics();
 const { createMessaging } = require('./src/services/messaging');
 const messaging = createMessaging({ provider: runtime.providers.sms, logger });
 
+// The client-supplied original filename is never trusted for the stored path — it could
+// contain `../` traversal segments to write outside UPLOAD_DIR. The extension is derived
+// solely from the server-validated mimetype allowlist below.
+const UPLOAD_EXT_BY_MIME = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf' };
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, `${uuidv4()}-${file.originalname}`)
+  filename: (req, file, cb) => cb(null, `${uuidv4()}${UPLOAD_EXT_BY_MIME[file.mimetype] || ''}`)
 });
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
-  const allowed = ['image/jpeg','image/png','image/webp','application/pdf'];
-  cb(null, allowed.includes(file.mimetype));
+  cb(null, Object.prototype.hasOwnProperty.call(UPLOAD_EXT_BY_MIME, file.mimetype));
 }});
 
 // ─── App Setup ───────────────────────────────────────────────
@@ -69,6 +72,14 @@ const authLimiter = createRateLimiter({
   message: 'Too many authentication attempts. Please wait a moment and try again.', code: 'auth_rate_limited'
 });
 const writeLimiter = createRateLimiter({ scope: 'write', windowMs: runtime.rateLimit.windowMs, max: runtime.rateLimit.write, enabled: runtime.rateLimit.enabled });
+// Pickup/delivery handover codes are only 4 digits and, unlike login/registration OTPs,
+// have no per-account attempt counter — scope a tight limiter per (rider, delivery) pair
+// so an assigned rider can't brute-force a code within the broader write-rate budget.
+const otpHandoverLimiter = createRateLimiter({
+  scope: 'otp-handover', windowMs: 10 * 60_000, max: 5, enabled: runtime.rateLimit.enabled,
+  keyGenerator: (req) => `${req.user?.id}:${req.params.id}`,
+  message: 'Too many code attempts for this delivery. Try again later.', code: 'otp_handover_limited'
+});
 app.use('/api', globalLimiter);
 app.use('/api/auth', authLimiter);
 app.use('/api', (req, res, next) => (req.method === 'GET' || req.method === 'HEAD' ? next() : writeLimiter(req, res, next)));
@@ -419,9 +430,19 @@ db.exec(`
 function seedData() {
   const adminCount = db.prepare('SELECT COUNT(*) as c FROM users WHERE role=?').get('admin');
   if (adminCount.c === 0) {
-    const hash = bcrypt.hashSync('Admin@2026', 10);
+    // No fixed default: a shipped, publicly-known admin password is a standing compromise.
+    // Set ADMIN_SEED_PASSWORD to control it, or a fresh random one is generated and logged once.
+    const generated = !process.env.ADMIN_SEED_PASSWORD;
+    const seedPassword = process.env.ADMIN_SEED_PASSWORD || crypto.randomBytes(9).toString('base64url');
+    const hash = bcrypt.hashSync(seedPassword, 10);
     db.prepare('INSERT INTO users (id,phone,email,password,full_name,role,status) VALUES (?,?,?,?,?,?,?)')
       .run(uuidv4(), '+250780000000', 'admin@movo.rw', hash, 'MOVO Administrator', 'admin', 'active');
+    if (generated) {
+      console.log(`\n  First-run admin account created: +250780000000 / ${seedPassword}\n  Store this securely and change it via the admin portal — it will not be shown again.\n`);
+      logger.warn('admin_seed_password_generated', { phone: '+250780000000' });
+    } else {
+      logger.info('admin_seeded', { phone: '+250780000000' });
+    }
   }
   const zoneCount = db.prepare('SELECT COUNT(*) as c FROM delivery_zones').get();
   if (zoneCount.c === 0) {
@@ -510,6 +531,11 @@ function haversine(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
+
+const DELIVERY_STATUSES = new Set([
+  'created', 'scheduled', 'searching', 'awaiting_rider_selection', 'assigned', 'going_pickup',
+  'arrived_pickup', 'picked_up', 'in_transit', 'arrived_dest', 'delivered', 'cancelled', 'failed'
+]);
 
 function genOTP() { return String(crypto.randomInt(100000, 1000000)); }
 function genOrderNo() { return 'MV' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(3).toString('hex').toUpperCase(); }
@@ -758,7 +784,7 @@ function authProfile(user) {
 }
 
 // ─── AUTH ROUTES ─────────────────────────────────────────────
-app.post('/api/auth/register', route((req, res) => {
+app.post('/api/auth/register', route(async (req, res) => {
   {
     const { phone, full_name, email, password, role, company_name, tax_id, national_id, license_number, motorcycle_plate } = req.body;
     if (!phone || !full_name || !role) return resErr(res, 'Phone, name, and role are required', 400, 'missing_field');
@@ -769,9 +795,11 @@ app.post('/api/auth/register', route((req, res) => {
     if (role === 'business' && !company_name?.trim()) return resErr(res, 'Company name is required', 400, 'missing_field');
     if (role === 'rider' && (!national_id?.trim() || !license_number?.trim() || !motorcycle_plate?.trim())) return resErr(res, 'National ID, license number, and motorcycle plate are required', 400, 'missing_field');
     if (db.prepare('SELECT id FROM users WHERE phone=?').get(canonicalPhone)) return resErr(res, 'Phone number already registered', 409, 'phone_taken');
-    const hash = password ? bcrypt.hashSync(password, BCRYPT_ROUNDS) : null;
+    // Hashing happens off the event loop (async bcrypt) before the synchronous DB transaction,
+    // since better-sqlite3 transactions can't span an await.
+    const hash = password ? await bcrypt.hash(password, BCRYPT_ROUNDS) : null;
     const otp = genOTP();
-    const otpHash = bcrypt.hashSync(otp, BCRYPT_ROUNDS);
+    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
     const id = uuidv4();
     const create = db.transaction(() => {
       db.prepare("INSERT INTO users (id,phone,email,password,full_name,role,otp_code,otp_expires) VALUES (?,?,?,?,?,?,?,datetime('now','+10 minutes'))")
@@ -787,7 +815,7 @@ app.post('/api/auth/register', route((req, res) => {
   }
 }));
 
-app.post('/api/auth/verify-otp', route((req, res) => {
+app.post('/api/auth/verify-otp', route(async (req, res) => {
   const { phone, otp } = req.body;
   if (!phone || !otp) return resErr(res, 'Phone and OTP required', 400, 'missing_field');
   const canonicalPhone = normalizePhone(phone);
@@ -802,7 +830,7 @@ app.post('/api/auth/verify-otp', route((req, res) => {
         .run(`+${runtime.security.lockoutMinutes} minutes`, user.id);
       return resErr(res, 'Too many verification attempts. Request a new code shortly.', 429, 'otp_attempts_exceeded');
     }
-    if (!user.otp_code || !bcrypt.compareSync(otp, user.otp_code)) {
+    if (!user.otp_code || !(await bcrypt.compare(otp, user.otp_code))) {
       db.prepare('UPDATE users SET otp_attempts=COALESCE(otp_attempts,0)+1 WHERE id=?').run(user.id);
       return resErr(res, 'Invalid OTP', 400, 'invalid_otp');
     }
@@ -814,7 +842,7 @@ app.post('/api/auth/verify-otp', route((req, res) => {
   resOK(res, { token: issueToken(user), user: authProfile(user) });
 }));
 
-app.post('/api/auth/login', route((req, res) => {
+app.post('/api/auth/login', route(async (req, res) => {
   const { phone, password } = req.body;
   if (!phone) return resErr(res, 'Phone number required', 400, 'missing_field');
   const canonicalPhone = normalizePhone(phone);
@@ -823,7 +851,7 @@ app.post('/api/auth/login', route((req, res) => {
   const lock = lockoutState(user);
   if (lock.locked) return resErr(res, `Account temporarily locked. Try again in ${lock.minutes} minute(s).`, 423, 'account_locked');
   if (password && user.password) {
-    if (!bcrypt.compareSync(password, user.password)) {
+    if (!(await bcrypt.compare(password, user.password))) {
       const locked = registerFailedLogin(user);
       audit(user.id, 'login_failed', 'user', user.id, { locked });
       return locked
@@ -832,7 +860,7 @@ app.post('/api/auth/login', route((req, res) => {
     }
   } else {
     const otp = genOTP();
-    const otpHash = bcrypt.hashSync(otp, BCRYPT_ROUNDS);
+    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
     db.prepare("UPDATE users SET otp_code=?,otp_expires=datetime('now','+10 minutes'),otp_attempts=0 WHERE id=?").run(otpHash, user.id);
     deliverOtp(canonicalPhone, otp, 'login');
     const response = { requires_otp: true, phone: canonicalPhone, message: runtime.otpTestMode ? 'OTP generated for test mode' : 'OTP sent to your phone' };
@@ -846,14 +874,15 @@ app.post('/api/auth/login', route((req, res) => {
 }));
 
 // Password change keeps the account-security baseline reachable from every client.
-app.post('/api/auth/change-password', auth, route((req, res) => {
+app.post('/api/auth/change-password', auth, route(async (req, res) => {
   const { current_password, new_password } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
-  if (user.password && !bcrypt.compareSync(current_password || '', user.password)) {
+  if (user.password && !(await bcrypt.compare(current_password || '', user.password))) {
     return resErr(res, 'Current password is incorrect', 401, 'invalid_credentials');
   }
   validate.password(new_password, 'new_password');
-  db.prepare("UPDATE users SET password=?,updated_at=datetime('now') WHERE id=?").run(bcrypt.hashSync(new_password, BCRYPT_ROUNDS), user.id);
+  const newHash = await bcrypt.hash(new_password, BCRYPT_ROUNDS);
+  db.prepare("UPDATE users SET password=?,updated_at=datetime('now') WHERE id=?").run(newHash, user.id);
   audit(user.id, 'password_changed', 'user', user.id, null);
   resOK(res, { message: 'Password updated' });
 }));
@@ -1143,22 +1172,33 @@ app.get('/api/business/members', auth, roleAuth('business'), (req, res) => {
   resOK(res, members);
 });
 
-app.post('/api/business/members', auth, roleAuth('business'), (req, res) => {
+app.post('/api/business/members', auth, roleAuth('business'), route(async (req, res) => {
   try {
     const { phone, full_name, role, spending_limit } = req.body;
     if (!phone || !full_name) return resErr(res, 'Phone and name required');
-    let user = db.prepare('SELECT id FROM users WHERE phone=?').get(phone);
+    const canonicalPhone = normalizePhone(phone) || phone;
+    let user = db.prepare('SELECT id FROM users WHERE phone=?').get(canonicalPhone);
+    let newlyCreated = false;
     if (!user) {
-      user = { id: uuidv4() };
-      db.prepare('INSERT INTO users (id,phone,full_name,role,status) VALUES (?,?,?,?,?)').run(user.id, phone, full_name, 'customer', 'active');
+      // A business owner names this phone number, but the person behind it hasn't proven
+      // ownership — seed the account 'pending' (not 'active') and send it the same OTP
+      // challenge registration uses, so `auth` rejects sign-in until they verify it themselves.
+      const otp = genOTP();
+      const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
+      const id = uuidv4();
+      db.prepare("INSERT INTO users (id,phone,full_name,role,status,otp_code,otp_expires) VALUES (?,?,?,?,?,?,datetime('now','+10 minutes'))")
+        .run(id, canonicalPhone, full_name, 'customer', 'pending', otpHash);
+      user = { id };
+      newlyCreated = true;
+      deliverOtp(canonicalPhone, otp, 'business_member_invite');
     }
     const existing = db.prepare('SELECT id FROM business_members WHERE business_id=? AND user_id=?').get(req.user.id, user.id);
     if (existing) return resErr(res, 'Already a member');
     db.prepare('INSERT INTO business_members (id,business_id,user_id,role,spending_limit) VALUES (?,?,?,?,?)')
       .run(uuidv4(), req.user.id, user.id, role||'member', spending_limit||0);
-    resOK(res, { message: 'Member added' });
+    resOK(res, { message: newlyCreated ? 'Member invited — they must verify their phone via OTP before they can sign in' : 'Member added' });
   } catch(e) { resErr(res, e.message); }
-});
+}));
 
 app.get('/api/business/invoices', auth, roleAuth('business'), (req, res) => {
   const invoices = db.prepare(`SELECT date(created_at) as month, COUNT(*) as deliveries, SUM(total_charge) as total
@@ -1472,7 +1512,7 @@ app.put('/api/deliveries/:id/arrive-pickup', auth, roleAuth('rider'), (req, res)
   resOK(res, { message: 'Arrived at pickup' });
 });
 
-app.put('/api/deliveries/:id/verify-pickup', auth, roleAuth('rider'), (req, res) => {
+app.put('/api/deliveries/:id/verify-pickup', auth, roleAuth('rider'), otpHandoverLimiter, (req, res) => {
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='arrived_pickup'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found');
   const { otp, photo } = req.body;
@@ -1502,7 +1542,7 @@ app.put('/api/deliveries/:id/arrive-dest', auth, roleAuth('rider'), (req, res) =
   resOK(res, { message: 'Arrived at destination' });
 });
 
-app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), route((req, res) => {
+app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), otpHandoverLimiter, route((req, res) => {
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='arrived_dest'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found', 404, 'delivery_not_found');
   const { otp, photo, recipient_name, notes, signature } = req.body;
@@ -1633,6 +1673,12 @@ app.get('/api/deliveries/:id/receipt', auth, route((req, res) => {
 // ─── PAYMENT ROUTES ──────────────────────────────────────────
 app.post('/api/payments/process', auth, (req, res) => {
   try {
+    // No real payment gateway is wired in yet — this endpoint lets a customer self-assert
+    // that they've paid. That's fine for a sandbox demo but must never accept real traffic
+    // until a real provider is integrated, since it currently just trusts the client.
+    if (runtime.providers.payment !== 'sandbox') {
+      return resErr(res, 'Payment provider is not configured for live processing', 501, 'payment_provider_not_configured');
+    }
     const { delivery_id, method } = req.body;
     const d = db.prepare('SELECT * FROM deliveries WHERE id=? AND customer_id=?').get(delivery_id, req.user.id);
     if (!d) return resErr(res, 'Delivery not found');
@@ -1770,6 +1816,7 @@ app.put('/api/admin/users/:id/status', auth, roleAuth('admin'), route((req, res)
 app.get('/api/admin/riders/:id', auth, roleAuth('admin'), (req, res) => {
   const rider = db.prepare('SELECT u.*,r.* FROM users u JOIN riders r ON u.id=r.user_id WHERE u.id=?').get(req.params.id);
   if (!rider) return resErr(res, 'Rider not found', 404);
+  delete rider.password; delete rider.otp_code; delete rider.otp_expires;
   const recentDeliveries = db.prepare('SELECT * FROM deliveries WHERE rider_id=? ORDER BY created_at DESC LIMIT 10').all(req.params.id);
   const ratings = db.prepare('SELECT * FROM ratings WHERE rated_id=? ORDER BY created_at DESC LIMIT 10').all(req.params.id);
   resOK(res, { ...rider, recentDeliveries, ratings });
@@ -1802,6 +1849,7 @@ app.get('/api/admin/deliveries', auth, roleAuth('admin'), route((req, res) => {
 app.put('/api/admin/deliveries/:id', auth, roleAuth('admin'), (req, res) => {
   const { status, note } = req.body;
   if (!status) return resErr(res, 'Status required');
+  if (!DELIVERY_STATUSES.has(status)) return resErr(res, 'Invalid status', 400, 'invalid_status');
   const d = db.prepare('SELECT * FROM deliveries WHERE id=?').get(req.params.id);
   if (!d) return resErr(res, 'Not found', 404);
   updateDeliveryStatus(d.id, status, { note: note || 'Admin update' });
@@ -2174,7 +2222,7 @@ io.on('connection', (socket) => {
 
   socket.on('authenticate', (token) => {
     try {
-      const payload = jwt.verify(token, JWT_SECRET);
+      const payload = verifyToken(token);
       const user = db.prepare('SELECT id,phone,full_name,role,status FROM users WHERE id=?').get(payload.id);
       if (!user || user.status !== 'active') throw new Error('Account unavailable');
       currentUser = user;
@@ -2367,8 +2415,6 @@ server.listen(PORT, () => {
   ║  Rider App:     http://localhost:${PORT}/rider    ║
   ║  Business:      http://localhost:${PORT}/business ║
   ║  Admin:         http://localhost:${PORT}/admin    ║
-  ║                                                  ║
-  ║  Admin login:   +250780000000 / Admin@2026       ║
   ╚══════════════════════════════════════════════════╝
   `);
 });

@@ -43,7 +43,7 @@ async function register(role, suffix, extra = {}) {
 test.before(async () => {
   server = spawn(process.execPath, ['server.js'], {
     cwd: root,
-    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DB_PATH: dbPath, JWT_SECRET: 'admin-portal-test-secret', OTP_TEST_MODE: 'true', LIVE_MAP_DEMO_MODE: 'true' },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DB_PATH: dbPath, JWT_SECRET: 'admin-portal-test-secret', OTP_TEST_MODE: 'true', LIVE_MAP_DEMO_MODE: 'true', ADMIN_SEED_PASSWORD: 'Admin@2026' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   const started = await new Promise((resolve, reject) => {

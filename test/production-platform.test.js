@@ -99,7 +99,8 @@ async function onlineRider(admin) {
 
 test.before(async () => {
   server = await startServer({
-    DB_PATH: dbPath, JWT_SECRET: 'production-platform-test-secret', OTP_TEST_MODE: 'true', RATE_LIMIT_ENABLED: 'false'
+    DB_PATH: dbPath, JWT_SECRET: 'production-platform-test-secret', OTP_TEST_MODE: 'true', RATE_LIMIT_ENABLED: 'false',
+    ADMIN_SEED_PASSWORD: 'Admin@2026'
   }, port);
   db = new Database(dbPath);
 });

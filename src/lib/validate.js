@@ -101,9 +101,12 @@ function requiredPhone(value, field, { label = field } = {}) {
 }
 
 /** Rejects passwords that would fail the platform's account-security baseline. */
-function password(value, field = 'password', { minLength = 8 } = {}) {
+function password(value, field = 'password', { minLength = 8, maxLength = 128 } = {}) {
   if (typeof value !== 'string' || value.length < minLength) {
     fail(`Password must be at least ${minLength} characters`, field, 'weak_password');
+  }
+  if (value.length > maxLength) {
+    fail(`Password must be at most ${maxLength} characters`, field, 'weak_password');
   }
   if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
     fail('Password must include at least one letter and one number', field, 'weak_password');

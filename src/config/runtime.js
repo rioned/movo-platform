@@ -1,4 +1,5 @@
 const path = require('path');
+const crypto = require('crypto');
 
 function positiveInteger(value, fallback, name) {
   if (value === undefined || value === '') return fallback;
@@ -26,12 +27,22 @@ function loadRuntimeConfig(env = process.env) {
   if (production && env.OTP_TEST_MODE === 'true') throw new Error('OTP_TEST_MODE must not be enabled in production');
   const allowedOrigins = (env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
     .split(',').map(value => value.trim()).filter(Boolean);
+  // No fixed fallback secret: a hardcoded value visible to anyone with repo access would let
+  // them forge valid tokens for any user if a deployment ever forgets to set JWT_SECRET,
+  // regardless of NODE_ENV. Missing it gets a random per-boot secret instead (existing tokens
+  // won't survive a restart until JWT_SECRET is set explicitly) rather than a public one.
+  const jwtSecretGenerated = !env.JWT_SECRET;
+  const jwtSecret = env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+  if (jwtSecretGenerated && !test) {
+    console.warn('[movo] JWT_SECRET not set — generated a random per-boot secret. Set JWT_SECRET explicitly for any deployment that must survive a restart.');
+  }
   return {
     nodeEnv: env.NODE_ENV || 'development',
     production,
     test,
     port: positiveInteger(env.PORT, 3000, 'PORT'),
-    jwtSecret: env.JWT_SECRET || 'development-only-movo-jwt-secret',
+    jwtSecret,
+    jwtSecretGenerated,
     jwtExpiry: env.JWT_EXPIRY || '7d',
     dbPath: env.DB_PATH || (env.NODE_ENV === 'test' ? path.join(process.cwd(), 'movo-test.db') : path.join(process.cwd(), 'movo.db')),
     allowedOrigins,
@@ -77,7 +88,7 @@ function evaluateReadiness(config, dependencies) {
     if (!['sandbox', 'osm', 'mtn-momo', 'airtel-money', 'twilio'].includes(mode)) failures.push(`unsupported ${name} provider: ${mode}`);
   }
   if (config.production) {
-    if (config.jwtSecret === 'development-only-movo-jwt-secret') failures.push('production JWT secret is the development default');
+    if (config.jwtSecretGenerated) failures.push('production JWT secret was auto-generated because JWT_SECRET is unset');
     if (config.otpTestMode) failures.push('OTP test mode is enabled');
     if (!config.rateLimit.enabled) failures.push('rate limiting is disabled');
   }

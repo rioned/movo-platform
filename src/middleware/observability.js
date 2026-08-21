@@ -127,7 +127,10 @@ function requestObserver({ logger, metrics, ignorePaths = [] } = {}) {
 
     res.on('finish', () => {
       const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
-      const route = req.route?.path ? `${req.baseUrl || ''}${req.route.path}` : normalizePath(req.path);
+      // Unmatched paths (404s) collapse to a single fixed label — using the literal request
+      // path here would let an attacker grow the counters/histogram Maps without bound by
+      // requesting many distinct nonexistent routes (neither is ever pruned).
+      const route = req.route?.path ? `${req.baseUrl || ''}${req.route.path}` : 'unmatched';
       const labels = { method: req.method, route, status: String(res.statusCode) };
       metrics.incrementCounter('movo_http_requests_total', labels);
       metrics.observeDuration(durationSeconds, { method: req.method, route });
@@ -147,12 +150,4 @@ function requestObserver({ logger, metrics, ignorePaths = [] } = {}) {
   };
 }
 
-/** Collapses identifiers out of unmatched paths so metric cardinality stays bounded. */
-function normalizePath(pathname) {
-  return pathname
-    .split('/')
-    .map(segment => (/^[0-9a-f]{8}-[0-9a-f]{4}/i.test(segment) || /^\d+$/.test(segment) ? ':id' : segment))
-    .join('/') || '/';
-}
-
-module.exports = { createLogger, createMetrics, requestObserver, normalizePath, LEVELS };
+module.exports = { createLogger, createMetrics, requestObserver, LEVELS };
