@@ -1,0 +1,55 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - run: npm ci
+      - run: npm run test:syntax
+      - run: npm test
+
+  deploy:
+    name: Deploy (20% canary → auto-promote or auto-rollback)
+    needs: test
+    runs-on: ubuntu-latest
+    # Backend-only changes trigger a deploy. Android app changes are built by
+    # this same workflow's test job but are not auto-shipped to a store —
+    # they still require manual signing/release (see android/README).
+    steps:
+      - name: Deploy commit to VPS
+        env:
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # The remote key is forced-command restricted (see deploy/ssh-wrapper.sh):
+          # it only accepts a bare 40-char commit SHA and runs deploy.sh with it.
+          # deploy.sh itself does the canary rollout, bake/monitor window, and
+          # automatic promote-or-rollback entirely on the VPS — this step just
+          # triggers it and streams the log.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@"$VPS_HOST" \
+            "${{ github.sha }}"

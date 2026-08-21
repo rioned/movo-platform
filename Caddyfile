@@ -1,13 +1,13 @@
-{
-	auto_https disable_redirects
-	default_sni 192.168.0.200
+movo-vervice.tech, www.movo-vervice.tech {
+	reverse_proxy movo:3000
 }
 
-192.168.0.200:443, localhost:443, 127.0.0.1:443 {
+31.97.111.156:443, localhost:443, 127.0.0.1:443 {
 	tls internal
 	reverse_proxy movo:3000
 }
 
-:80 {
-	redir https://192.168.0.200{uri} permanent
+31.97.111.156:80, localhost:80, 127.0.0.1:80 {
+	redir https://31.97.111.156{uri} permanent
 }
+

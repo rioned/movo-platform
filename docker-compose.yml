@@ -1,7 +1,7 @@
 services:
   movo:
     build: .
-    image: movo-platform:latest
+    image: movo-platform:${STABLE_SHA:-latest}
     container_name: movo-platform
     restart: unless-stopped
     expose:
@@ -18,6 +18,32 @@ services:
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
       interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # Canary slot: only started during a deploy (docker compose --profile canary ...),
+  # runs the candidate commit alongside stable at a partial traffic weight until
+  # deploy.sh either promotes it (becomes the new `movo`) or tears it down.
+  movo-canary:
+    image: movo-platform:${CANARY_SHA:-latest}
+    container_name: movo-platform-canary
+    profiles: ["canary"]
+    restart: "no"
+    expose:
+      - "3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_PATH: /app/data/movo.db
+    volumes:
+      - movo-data:/app/data
+      - movo-uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 10s
       timeout: 5s
       start_period: 15s
       retries: 3
