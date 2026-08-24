@@ -16,10 +16,17 @@ data class RiderProfile(
     val motorcyclePlate: String = "",
     val motorcycleMake: String = "",
     val motorcycleType: String = "",
-    val motorcycleColor: String = ""
+    val motorcycleColor: String = "",
+    val vehicleType: String = "motorcycle",
+    val carPlate: String = "",
+    val carMake: String = "",
+    val carModel: String = "",
+    val carColor: String = "",
+    val totalRides: Int = 0
 ) {
     val isApproved: Boolean get() = approvalStatus == "approved"
     val isOnline: Boolean get() = availability == "online" || availability == "busy"
+    val isDriver: Boolean get() = vehicleType == "car"
 }
 
 /** A delivery offered to this rider, before acceptance reveals contact details. */
@@ -89,6 +96,8 @@ data class RiderHomeState(
     val profile: RiderProfile = RiderProfile(),
     val offer: DeliveryOffer? = null,
     val activeDelivery: ActiveDelivery? = null,
+    val rideOffer: RideOffer? = null,
+    val activeRide: ActiveRide? = null,
     val serverTime: String? = null,
     val pendingSync: Int = 0
 )
@@ -111,7 +120,13 @@ fun JSONObject.toRiderProfile(): RiderProfile = RiderProfile(
     motorcyclePlate = stringOrNull("motorcycle_plate").orEmpty(),
     motorcycleMake = stringOrNull("motorcycle_make").orEmpty(),
     motorcycleType = stringOrNull("motorcycle_type").orEmpty(),
-    motorcycleColor = stringOrNull("motorcycle_color").orEmpty()
+    motorcycleColor = stringOrNull("motorcycle_color").orEmpty(),
+    vehicleType = stringOrNull("vehicle_type") ?: "motorcycle",
+    carPlate = stringOrNull("car_plate").orEmpty(),
+    carMake = stringOrNull("car_make").orEmpty(),
+    carModel = stringOrNull("car_model").orEmpty(),
+    carColor = stringOrNull("car_color").orEmpty(),
+    totalRides = optInt("total_rides", 0)
 )
 
 fun JSONObject.toDeliveryOffer(): DeliveryOffer = DeliveryOffer(

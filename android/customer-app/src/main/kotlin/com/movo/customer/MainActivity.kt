@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
@@ -31,6 +32,8 @@ import com.movo.customer.network.CustomerApi
 import com.movo.customer.network.CustomerApiException
 import com.movo.customer.profile.ProfileScreen
 import com.movo.customer.receive.ReceiveScreen
+import com.movo.customer.ride.RideBookingScreen
+import com.movo.customer.ride.RideTrackingScreen
 import com.movo.customer.send.SendScreen
 import com.movo.customer.session.CustomerSession
 import com.movo.customer.tracking.TrackingScreen
@@ -51,11 +54,13 @@ private val RoadInk = Color(0xFF151817)
 private val MotoAmber = Color(0xFFF5A623)
 
 enum class CustomerDestination(val label: String, val icon: ImageVector) {
+    Ride("Ride", Icons.Filled.LocationOn),
     Send("Send", Icons.Filled.Send),
     Receive("Receive", Icons.Filled.MailOutline),
     Activity("Activity", Icons.Filled.List),
     Profile("Account", Icons.Filled.Person),
-    Tracking("Tracking", Icons.Filled.Send)
+    Tracking("Tracking", Icons.Filled.Send),
+    RideTracking("Ride tracking", Icons.Filled.LocationOn)
 }
 
 class MainActivity : ComponentActivity() {
@@ -150,7 +155,7 @@ private fun SplashScreen() {
         ) {
             Text("MOVO", style = MaterialTheme.typography.displaySmall, color = Color.White)
             Text(
-                "Deliver with Confidence",
+                "Ride, or send a parcel",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Color.White.copy(alpha = 0.88f)
             )
@@ -165,10 +170,12 @@ internal fun JSONObject.dataObject(): JSONObject = optJSONObject("data") ?: this
 
 @Composable
 private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: CustomerSession, online: Boolean, onSignedOut: () -> Unit) {
-    var destination by rememberSaveable { mutableStateOf(CustomerDestination.Send) }
+    var destination by rememberSaveable { mutableStateOf(CustomerDestination.Ride) }
     var trackingDeliveryId by rememberSaveable { mutableStateOf<String?>(null) }
-    val mainDestinations = listOf(CustomerDestination.Send, CustomerDestination.Receive, CustomerDestination.Activity, CustomerDestination.Profile)
+    var trackingRideId by rememberSaveable { mutableStateOf<String?>(null) }
+    val mainDestinations = listOf(CustomerDestination.Ride, CustomerDestination.Send, CustomerDestination.Receive, CustomerDestination.Activity, CustomerDestination.Profile)
     fun openTracking(id: String) { trackingDeliveryId = id; destination = CustomerDestination.Tracking }
+    fun openRideTracking(id: String) { trackingRideId = id; destination = CustomerDestination.RideTracking }
     LaunchedEffect(online) {
         if (!online) return@LaunchedEffect
         runCatching {
@@ -180,12 +187,24 @@ private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: C
             if (status == "awaiting_rider_selection" && session.restoreJourney()?.deliveryId == id) destination = CustomerDestination.Send
             else if (id.isNotBlank()) openTracking(id)
         }
+        // A ride survives an app restart the same way a delivery does: find the
+        // customer's own non-terminal ride, if any, and resume live tracking on it.
+        runCatching {
+            val response = api.get("/api/rides")
+            response.optJSONArray("data")
+        }.getOrNull()?.let { rides ->
+            for (index in 0 until rides.length()) {
+                val ride = rides.optJSONObject(index) ?: continue
+                val status = ride.optString("status")
+                if (status !in setOf("completed", "cancelled")) { openRideTracking(ride.optString("id")); break }
+            }
+        }
     }
-    BackHandler(destination != CustomerDestination.Send) { destination = CustomerDestination.Send }
+    BackHandler(destination != CustomerDestination.Ride) { destination = CustomerDestination.Ride }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (destination != CustomerDestination.Tracking) {
+            if (destination != CustomerDestination.Tracking && destination != CustomerDestination.RideTracking) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
                     mainDestinations.forEach { item ->
                         NavigationBarItem(
@@ -215,13 +234,17 @@ private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: C
             }
             Box(Modifier.weight(1f)) {
                 when (destination) {
+                    CustomerDestination.Ride -> RideBookingScreen(api, profile, online, onRideCreated = ::openRideTracking)
                     CustomerDestination.Send -> SendScreen(api, profile, session, online, onTracking = ::openTracking)
                     CustomerDestination.Receive -> ReceiveScreen(api, onTrack = ::openTracking)
                     CustomerDestination.Activity -> ActivityScreen(api, onTrack = ::openTracking)
-                    CustomerDestination.Profile -> ProfileScreen(profile, api, connected = online, onClose = { destination = CustomerDestination.Send }) { session.clear(); onSignedOut() }
+                    CustomerDestination.Profile -> ProfileScreen(profile, api, connected = online, onClose = { destination = CustomerDestination.Ride }) { session.clear(); onSignedOut() }
                     CustomerDestination.Tracking -> trackingDeliveryId?.let { id ->
                         TrackingScreen(id, api, session.token().orEmpty(), session, online, onBack = { destination = CustomerDestination.Send }, onReselect = { destination = CustomerDestination.Send })
                     } ?: Placeholder("No delivery selected")
+                    CustomerDestination.RideTracking -> trackingRideId?.let { id ->
+                        RideTrackingScreen(id, api, session.token().orEmpty(), online, onBack = { destination = CustomerDestination.Ride }, onDone = { trackingRideId = null; destination = CustomerDestination.Ride })
+                    } ?: Placeholder("No ride selected")
                 }
             }
         }

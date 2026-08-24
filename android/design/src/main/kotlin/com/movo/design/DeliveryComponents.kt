@@ -140,6 +140,36 @@ fun DeliveryTimeline(events: List<TimelineEntry>, modifier: Modifier = Modifier)
     }
 }
 
+/** The ride-hailing counterpart of [DeliveryProgress], driven by [MovoRideStage]. */
+@Composable
+fun RideProgress(stage: MovoRideStage, modifier: Modifier = Modifier) {
+    val steps = MovoRideStage.trackedSteps
+    val current = stage.trackedStep
+    val failed = stage == MovoRideStage.Cancelled
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.tiny)) {
+        steps.forEachIndexed { index, label ->
+            val reached = index <= current
+            val color = when {
+                failed && index == current -> MovoTheme.status.critical
+                reached -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.outlineVariant
+            }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(color))
+                Spacer(Modifier.height(MovoSpacing.tiny))
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (reached) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    textAlign = TextAlign.Center,
+                    overflow = TextOverflow.Clip
+                )
+            }
+        }
+    }
+}
+
 data class TimelineEntry(val title: String, val subtitle: String?)
 
 /**
@@ -199,6 +229,35 @@ fun PriceSummary(
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
+        }
+    }
+}
+
+/** [PriceSummary]'s currency-generic sibling — used by ride fares (MZN), not tied to RWF. */
+@Composable
+fun FareSummary(
+    total: Double,
+    currency: String,
+    modifier: Modifier = Modifier,
+    label: String = "Ride fare",
+    distanceKm: Double? = null,
+    etaMinutes: Int? = null,
+    caption: String? = null
+) {
+    MovoCard(modifier, color = MaterialTheme.colorScheme.primaryContainer, elevation = 0.dp) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(formatMoney(total, currency), style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                etaMinutes?.let { Text(formatMinutes(it), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer) }
+                distanceKm?.let { Text(formatDistance(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer) }
+            }
+        }
+        caption?.let {
+            Spacer(Modifier.height(MovoSpacing.small))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
         }
     }
 }

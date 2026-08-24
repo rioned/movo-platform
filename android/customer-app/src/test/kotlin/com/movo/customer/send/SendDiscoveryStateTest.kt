@@ -19,6 +19,7 @@ class SendDiscoveryStateTest {
             DiscoveryPhase.ManualPickupRequired,
             DiscoveryPhase.Scanning,
             DiscoveryPhase.NoRiders,
+            DiscoveryPhase.OutOfServiceArea,
             DiscoveryPhase.Offline,
             DiscoveryPhase.Error("Unable to scan for riders")
         )

@@ -9,6 +9,10 @@ sealed interface DiscoveryPhase {
     data object Scanning : DiscoveryPhase
     data object Available : DiscoveryPhase
     data object NoRiders : DiscoveryPhase
+    // The backend resolved this pickup to no service zone at all (spec §12) — a
+    // structural "MOVO isn't here" fact, distinct from NoRiders' "nobody's online
+    // right now." Rescanning the same pickup can never fix it; only moving the pin can.
+    data object OutOfServiceArea : DiscoveryPhase
     data object Offline : DiscoveryPhase
     data class Error(val message: String) : DiscoveryPhase
 }

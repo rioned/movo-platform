@@ -37,7 +37,12 @@ data class RiderAuthRequest(
     val fullName: String = "",
     val nationalId: String = "",
     val licenseNumber: String = "",
+    val vehicleType: String = "motorcycle",
     val motorcyclePlate: String = "",
+    val carPlate: String = "",
+    val carMake: String = "",
+    val carModel: String = "",
+    val carColor: String = "",
     val otp: String = ""
 )
 
@@ -58,7 +63,12 @@ fun RiderAuthScreen(
     var fullName by remember { mutableStateOf("") }
     var nationalId by remember { mutableStateOf("") }
     var licenseNumber by remember { mutableStateOf("") }
+    var vehicleType by remember { mutableStateOf("car") }
     var motorcyclePlate by remember { mutableStateOf("") }
+    var carPlate by remember { mutableStateOf("") }
+    var carMake by remember { mutableStateOf("") }
+    var carModel by remember { mutableStateOf("") }
+    var carColor by remember { mutableStateOf("") }
     var otp by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
 
@@ -78,9 +88,9 @@ fun RiderAuthScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Fixed dark-green hero: text is explicitly light in both themes.
-            Text("MOVO Rider", style = MaterialTheme.typography.displaySmall, color = Color.White)
+            Text("MOVO Driver", style = MaterialTheme.typography.displaySmall, color = Color.White)
             Text(
-                "Earn on your own motorcycle, on your own schedule",
+                "Drive rides or deliver parcels, on your own schedule",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.88f)
             )
@@ -122,8 +132,22 @@ fun RiderAuthScreen(
                 if (mode == RiderAuthMode.REGISTER) {
                     MovoField(fullName, { fullName = it }, "Full legal name", enabled = !busy)
                     MovoField(nationalId, { nationalId = it }, "National ID number", enabled = !busy, supporting = "Checked during MOVO verification")
-                    MovoField(licenseNumber, { licenseNumber = it }, "Riding licence number", enabled = !busy)
-                    MovoField(motorcyclePlate, { motorcyclePlate = it.uppercase() }, "Motorcycle plate", enabled = !busy, supporting = "For example RAB 123 C")
+                    MovoField(licenseNumber, { licenseNumber = it }, "Driving licence number", enabled = !busy)
+                    SegmentedChoice(
+                        options = listOf(
+                            SegmentOption("car", "Drive a car", "Ride-hailing"),
+                            SegmentOption("motorcycle", "Ride a motorcycle", "Deliveries")
+                        ),
+                        selected = vehicleType, onSelect = { vehicleType = it }, enabled = !busy
+                    )
+                    if (vehicleType == "car") {
+                        MovoField(carPlate, { carPlate = it.uppercase() }, "Car plate", enabled = !busy, supporting = "For example AAB 123 MP")
+                        MovoField(carMake, { carMake = it }, "Car make (optional)", enabled = !busy)
+                        MovoField(carModel, { carModel = it }, "Car model (optional)", enabled = !busy)
+                        MovoField(carColor, { carColor = it }, "Car color (optional)", enabled = !busy)
+                    } else {
+                        MovoField(motorcyclePlate, { motorcyclePlate = it.uppercase() }, "Motorcycle plate", enabled = !busy, supporting = "For example RAB 123 C")
+                    }
                 }
 
                 if (mode == RiderAuthMode.VERIFY) {
@@ -150,8 +174,9 @@ fun RiderAuthScreen(
                         onSubmit(
                             RiderAuthRequest(
                                 mode = mode, phone = phone.trim(), password = password, fullName = fullName.trim(),
-                                nationalId = nationalId.trim(), licenseNumber = licenseNumber.trim(),
-                                motorcyclePlate = motorcyclePlate.trim(), otp = otp
+                                nationalId = nationalId.trim(), licenseNumber = licenseNumber.trim(), vehicleType = vehicleType,
+                                motorcyclePlate = motorcyclePlate.trim(), carPlate = carPlate.trim(),
+                                carMake = carMake.trim(), carModel = carModel.trim(), carColor = carColor.trim(), otp = otp
                             )
                         )
                     },

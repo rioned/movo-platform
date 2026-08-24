@@ -18,6 +18,9 @@ fun interface NearbyRiderSource {
     suspend fun scan(pickup: Coordinate): List<NearbyRider>
 }
 
+/** Thrown by a [NearbyRiderSource] when the backend reports the pickup has no service zone at all. */
+class OutOfServiceAreaException(message: String) : Exception(message)
+
 class RiderDiscoveryController(private val source: NearbyRiderSource) {
     private val mutableSnapshot = MutableStateFlow(DiscoverySnapshot(DiscoveryPhase.Locating))
     val snapshot: StateFlow<DiscoverySnapshot> = mutableSnapshot.asStateFlow()
@@ -65,6 +68,15 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
                 }
                 throw error
             }
+            if (error is OutOfServiceAreaException) {
+                synchronized(stateLock) {
+                    if (isCurrentLocked(version, pickup)) {
+                        inFlightPickup = null
+                        mutableSnapshot.value = DiscoverySnapshot(DiscoveryPhase.OutOfServiceArea, pickup)
+                    }
+                }
+                return
+            }
             val message = error.message
                 ?.trim()
                 ?.takeIf(String::isNotEmpty)
@@ -96,13 +108,17 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
 
 fun customerNearbyRiderSource(api: CustomerApi, radiusKm: Int = 10): NearbyRiderSource =
     NearbyRiderSource { pickup ->
-        val riders = api.get(
+        val data = api.get(
             "/api/mobile/v1/customer/nearby-riders?lat=${pickup.latitude}&lng=${pickup.longitude}&radius_km=$radiusKm"
-        )
-            .dataObject()
-            .optJSONArray("riders")
+        ).dataObject()
 
-        parseNearbyRiders(riders)
+        // `in_service_area` defaults to true so an older backend that hasn't shipped
+        // this field yet degrades to the previous "empty results" behavior instead
+        // of wrongly claiming every pickup is unserviceable.
+        if (!data.optBoolean("in_service_area", true)) {
+            throw OutOfServiceAreaException("MOVO is not currently available at this location.")
+        }
+        parseNearbyRiders(data.optJSONArray("riders"))
     }
 
 internal fun parseNearbyRiders(riders: JSONArray?): List<NearbyRider> {

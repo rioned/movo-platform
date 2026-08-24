@@ -83,6 +83,9 @@ function pagination(query = {}, { defaultLimit = 20, maxLimit = 100 } = {}) {
 }
 
 const RWANDA_MOBILE = /^\+2507\d{8}$/;
+// Mozambique mobile numbers: +258 followed by a 9-digit subscriber number starting
+// with the mobile prefix range 82-87 (Vodacom 84/85, Movitel 86/87, mCel 82/83).
+const MOZAMBIQUE_MOBILE = /^\+2588[2-7]\d{7}$/;
 
 function normalizePhone(phone) {
   if (typeof phone !== 'string') return null;
@@ -91,13 +94,49 @@ function normalizePhone(phone) {
   if (/^07\d{8}$/.test(compact)) national = compact;
   else if (/^2507\d{8}$/.test(compact)) national = `0${compact.slice(3)}`;
   else if (/^\+2507\d{8}$/.test(compact)) national = `0${compact.slice(4)}`;
-  return national ? `+250${national.slice(1)}` : null;
+  if (national) return `+250${national.slice(1)}`;
+  let mz;
+  if (/^8[2-7]\d{7}$/.test(compact)) mz = compact;
+  else if (/^2588[2-7]\d{7}$/.test(compact)) mz = compact.slice(3);
+  else if (/^\+2588[2-7]\d{7}$/.test(compact)) mz = compact.slice(4);
+  return mz ? `+258${mz}` : null;
 }
 
 function requiredPhone(value, field, { label = field } = {}) {
   const normalized = normalizePhone(value);
-  if (!normalized || !RWANDA_MOBILE.test(normalized)) fail(`${label} must be a valid Rwanda mobile number`, field, 'invalid_phone');
+  if (!normalized || !(RWANDA_MOBILE.test(normalized) || MOZAMBIQUE_MOBILE.test(normalized))) {
+    fail(`${label} must be a valid Rwanda or Mozambique mobile number`, field, 'invalid_phone');
+  }
   return normalized;
+}
+
+/**
+ * Validates a GeoJSON Polygon/MultiPolygon used for a zone service-area boundary.
+ * Only the outer ring of each polygon is required — holes are not an MVP concern.
+ * Returns the parsed geometry so the caller can re-serialize it for storage.
+ */
+function geoPolygon(value, field = 'boundary') {
+  let geom = value;
+  if (typeof value === 'string') {
+    try { geom = JSON.parse(value); } catch { fail(`${field} must be valid GeoJSON`, field, 'invalid_geometry'); }
+  }
+  if (!geom || typeof geom !== 'object') fail(`${field} must be a GeoJSON Polygon or MultiPolygon`, field, 'invalid_geometry');
+  if (!['Polygon', 'MultiPolygon'].includes(geom.type)) fail(`${field} must be a Polygon or MultiPolygon`, field, 'invalid_geometry');
+  const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+  if (!Array.isArray(polygons) || polygons.length === 0) fail(`${field} has no polygon rings`, field, 'invalid_geometry');
+  for (const poly of polygons) {
+    const ring = Array.isArray(poly) ? poly[0] : null;
+    if (!Array.isArray(ring) || ring.length < 3) fail(`${field} rings must have at least 3 points`, field, 'invalid_geometry');
+    for (const point of ring) {
+      if (!Array.isArray(point) || point.length < 2 || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
+        fail(`${field} contains an invalid coordinate`, field, 'invalid_geometry');
+      }
+      if (point[0] < -180 || point[0] > 180 || point[1] < -90 || point[1] > 90) {
+        fail(`${field} coordinates must be [lng, lat] within range`, field, 'invalid_geometry');
+      }
+    }
+  }
+  return geom;
 }
 
 /** Rejects passwords that would fail the platform's account-security baseline. */
@@ -124,8 +163,10 @@ module.exports = {
   boundedNumber,
   integerInRange,
   pagination,
+  geoPolygon,
   normalizePhone,
   requiredPhone,
   password,
-  RWANDA_MOBILE
+  RWANDA_MOBILE,
+  MOZAMBIQUE_MOBILE
 };

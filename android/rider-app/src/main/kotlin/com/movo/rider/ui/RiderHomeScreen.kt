@@ -23,7 +23,9 @@ import com.movo.design.StatusPill
 import com.movo.design.formatRwf
 import com.movo.rider.RiderMap
 import com.movo.rider.model.ActiveDelivery
+import com.movo.rider.model.ActiveRide
 import com.movo.rider.model.DeliveryOffer
+import com.movo.rider.model.RideOffer
 import com.movo.rider.model.RiderHomeState
 
 /**
@@ -44,6 +46,11 @@ fun RiderHomeScreen(
     onDeclineOffer: (DeliveryOffer) -> Unit,
     onOfferExpired: () -> Unit,
     onAdvance: (ActiveDelivery) -> Unit,
+    onAcceptRideOffer: (RideOffer) -> Unit,
+    onDeclineRideOffer: (RideOffer) -> Unit,
+    onRideOfferExpired: () -> Unit,
+    onAdvanceRide: (ActiveRide) -> Unit,
+    onCancelRide: (ActiveRide) -> Unit,
     onCall: (String) -> Unit,
     onNavigate: (Double?, Double?) -> Unit,
     onAddProof: () -> Unit,
@@ -51,9 +58,27 @@ fun RiderHomeScreen(
     onOpenProfile: () -> Unit,
     photo: (@Composable () -> Unit)? = null
 ) {
-    val focus = state.activeDelivery ?: state.offer?.let { offer ->
+    val focus = state.activeDelivery ?: state.activeRide?.let { ride ->
+        ActiveDelivery(
+            id = ride.id, orderNo = ride.rideNo, status = ride.status, serviceType = "ride",
+            pickupAddress = ride.pickupAddress, pickupName = "", pickupPhone = "",
+            pickupLat = ride.pickupLat, pickupLng = ride.pickupLng,
+            destinationAddress = ride.destinationAddress, destinationName = "", destinationPhone = "",
+            destinationLat = ride.destinationLat, destinationLng = ride.destinationLng,
+            earnings = ride.totalFare, distanceKm = ride.distanceKm, itemDescription = null, specialInstructions = null
+        )
+    } ?: state.offer?.let { offer ->
         ActiveDelivery(
             id = offer.deliveryId, orderNo = offer.orderNo, status = "assigned", serviceType = offer.serviceType,
+            pickupAddress = offer.pickupAddress, pickupName = "", pickupPhone = "",
+            pickupLat = offer.pickupLat, pickupLng = offer.pickupLng,
+            destinationAddress = offer.destinationAddress, destinationName = "", destinationPhone = "",
+            destinationLat = offer.destinationLat, destinationLng = offer.destinationLng,
+            earnings = offer.earnings, distanceKm = offer.distanceKm, itemDescription = null, specialInstructions = null
+        )
+    } ?: state.rideOffer?.let { offer ->
+        ActiveDelivery(
+            id = offer.rideId, orderNo = offer.rideNo, status = "assigned", serviceType = "ride",
             pickupAddress = offer.pickupAddress, pickupName = "", pickupPhone = "",
             pickupLat = offer.pickupLat, pickupLng = offer.pickupLng,
             destinationAddress = offer.destinationAddress, destinationName = "", destinationPhone = "",
@@ -103,12 +128,28 @@ fun RiderHomeScreen(
                     onReportIssue = onReportIssue
                 )
 
+                state.activeRide != null -> ActiveRideSheet(
+                    ride = state.activeRide,
+                    busy = busy,
+                    onAdvance = { onAdvanceRide(state.activeRide) },
+                    onNavigate = onNavigate,
+                    onCancel = { onCancelRide(state.activeRide) }
+                )
+
                 state.offer != null -> OfferSheet(
                     offer = state.offer,
                     busy = busy,
                     onAccept = { onAcceptOffer(state.offer) },
                     onDecline = { onDeclineOffer(state.offer) },
                     onExpired = onOfferExpired
+                )
+
+                state.rideOffer != null -> RideOfferSheet(
+                    offer = state.rideOffer,
+                    busy = busy,
+                    onAccept = { onAcceptRideOffer(state.rideOffer) },
+                    onDecline = { onDeclineRideOffer(state.rideOffer) },
+                    onExpired = onRideOfferExpired
                 )
 
                 else -> IdleSheet(state, busy, online, onGoOnline, onGoOffline)
@@ -138,12 +179,13 @@ private fun RiderStatusHeader(
                     StatusPill(
                         when {
                             state.activeDelivery != null -> "On a delivery"
+                            state.activeRide != null -> "On a ride"
                             state.profile.availability == "online" -> "Online"
                             state.profile.availability == "unavailable" -> "On a break"
                             else -> "Offline"
                         },
                         when {
-                            state.activeDelivery != null -> MovoTone.Warning
+                            state.activeDelivery != null || state.activeRide != null -> MovoTone.Warning
                             state.profile.availability == "online" -> MovoTone.Positive
                             else -> MovoTone.Neutral
                         }
@@ -177,7 +219,7 @@ private fun IdleSheet(state: RiderHomeState, busy: Boolean, online: Boolean, onG
         } else {
             Text("You are offline", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (state.profile.isApproved) "Go online to start receiving MOVO delivery offers near you."
+                if (state.profile.isApproved) "Go online to start receiving ${if (state.profile.isDriver) "ride" else "delivery"} requests near you."
                 else "You can go online once MOVO verifies your documents.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

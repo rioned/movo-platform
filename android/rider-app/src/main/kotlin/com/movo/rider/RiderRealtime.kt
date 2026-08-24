@@ -11,11 +11,16 @@ class RiderRealtime(baseUrl: String, token: String, private val onUpdate: () -> 
     socket.on(Socket.EVENT_CONNECT) { socket.emit("authenticate", token) }
     socket.on("new_delivery") { onUpdate() }
     socket.on("delivery_update") { onUpdate() }
+    socket.on("new_ride") { onUpdate() }
+    socket.on("ride_update") { onUpdate() }
     socket.on("notification") { onUpdate() }
   }
   fun connect() = socket.connect()
   fun disconnect() = socket.disconnect()
   fun sendLocation(lat: Double, lng: Double, deliveryId: String?) {
     socket.emit("rider_location", JSONObject().put("lat", lat).put("lng", lng).put("delivery_id", deliveryId))
+  }
+  fun sendRideLocation(lat: Double, lng: Double, rideId: String) {
+    socket.emit("driver_location", JSONObject().put("lat", lat).put("lng", lng).put("ride_id", rideId))
   }
 }
