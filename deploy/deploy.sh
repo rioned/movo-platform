@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Canary deploy for movo-platform: builds a commit as a new image, runs it
-# alongside the current stable container at a 20% traffic split via Caddy's
-# weighted load balancer, bakes for a monitoring window, then either
+# alongside the current stable container at an approximate 20% traffic split
+# (via a proportionally-repeated round_robin upstream list — Caddy has no
+# built-in weighted policy), bakes for a monitoring window, then either
 # promotes it to 100% (new stable) or rolls back to the old stable — fully
 # automatically, no human in the loop.
 #
@@ -48,12 +49,21 @@ PYEOF
   else
     python3 - "$CADDYFILE" "$canary_w" "$stable_w" <<'PYEOF'
 import re, sys
-path, canary_w, stable_w = sys.argv[1], sys.argv[2], sys.argv[3]
+from math import gcd
+path, canary_w, stable_w = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 text = open(path).read()
+# Caddy has no built-in "weighted" selection policy (only random, least_conn,
+# round_robin, first, ip_hash, uri_hash, header, cookie, query, random_choose)
+# — asking for one fails config reload with "module not registered". Instead,
+# approximate the split deterministically by repeating each upstream in
+# reduced proportion and letting the default round_robin cycle through them.
+g = gcd(canary_w, stable_w)
+canary_n, stable_n = canary_w // g, stable_w // g
+upstreams = " ".join(["movo:3000"] * stable_n + ["movo-canary:3000"] * canary_n)
 block = (
     "reverse_proxy {\n"
-    "\t\tto movo:3000 movo-canary:3000\n"
-    f"\t\tlb_policy weighted {stable_w} {canary_w}\n"
+    f"\t\tto {upstreams}\n"
+    "\t\tlb_policy round_robin\n"
     "\t}"
 )
 if "reverse_proxy movo:3000" in text:
@@ -103,7 +113,10 @@ log "Canary is healthy."
 
 # 3. Shift 20% of live traffic to canary.
 log "Shifting ${CANARY_WEIGHT}% of traffic to canary"
-set_caddy_weights "$CANARY_WEIGHT" $((100 - CANARY_WEIGHT))
+if ! set_caddy_weights "$CANARY_WEIGHT" $((100 - CANARY_WEIGHT)); then
+  log "Failed to shift traffic to canary (Caddy config error)"
+  rollback
+fi
 
 # 4. Bake: watch health + restarts + error logs for the monitoring window.
 log "Baking for ${CANARY_BAKE_SECONDS}s, watching health/restarts/errors..."
