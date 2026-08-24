@@ -185,12 +185,12 @@ private fun AuthHero() {
         ) {
             Text("MOVO", style = MaterialTheme.typography.displaySmall, color = Color.White)
             Text(
-                "Deliver with Confidence",
+                "Ride, or send a parcel",
                 style = MaterialTheme.typography.titleMedium,
                 color = Color.White
             )
             Text(
-                "Same-day parcel and document delivery across Kigali, handled by verified riders.",
+                "On-demand rides across Maputo, plus same-day parcel and document delivery in Kigali — verified drivers and riders.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.88f)
             )

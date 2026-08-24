@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOVO — Live Trip</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#0A6847;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}
+  .card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:16px;padding:2rem;max-width:420px;width:100%}
+  h1{font-size:1.4rem;margin-bottom:.25rem}
+  .status{display:inline-block;margin-bottom:1.25rem;padding:.25rem .75rem;border-radius:999px;background:rgba(255,255,255,.18);font-size:.85rem;text-transform:capitalize}
+  .row{display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.12);font-size:.95rem}
+  .row:last-child{border-bottom:none}
+  .label{opacity:.7}
+  .driver{margin-top:1rem;padding-top:1rem;border-top:1px solid rgba(255,255,255,.18)}
+  .muted{opacity:.7;font-size:.85rem;margin-top:1rem}
+  .error{opacity:.85}
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <h1>MOVO Trip</h1>
+    <p class="muted">Loading trip status…</p>
+  </div>
+<script>
+(function () {
+  const token = location.pathname.split('/').filter(Boolean).pop();
+  const card = document.getElementById('card');
+
+  function render(data) {
+    const driver = data.driver;
+    card.innerHTML = `
+      <h1>${data.rider_name}'s trip</h1>
+      <span class="status">${data.status.replace(/_/g, ' ')}</span>
+      <div class="row"><span class="label">Pickup</span><span>${data.pickup_address}</span></div>
+      <div class="row"><span class="label">Destination</span><span>${data.dest_address}</span></div>
+      ${driver ? `
+      <div class="driver">
+        <div class="row"><span class="label">Driver</span><span>${driver.name || 'Assigned'}</span></div>
+        ${driver.car_model ? `<div class="row"><span class="label">Vehicle</span><span>${driver.car_color || ''} ${driver.car_make || ''} ${driver.car_model || ''}</span></div>` : ''}
+        ${driver.plate ? `<div class="row"><span class="label">Plate</span><span>${driver.plate}</span></div>` : ''}
+      </div>` : `<p class="muted">Waiting for a driver to be assigned…</p>`}
+      <p class="muted">This is a live, read-only view shared for safety. It updates automatically.</p>
+    `;
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch('/api/track/share/' + encodeURIComponent(token));
+      const body = await res.json();
+      if (!body.success) throw new Error(body.error || 'Trip not found');
+      render(body.data);
+    } catch (err) {
+      card.innerHTML = `<h1>Trip unavailable</h1><p class="error">${err.message}</p>`;
+    }
+  }
+
+  poll();
+  setInterval(poll, 6000);
+})();
+</script>
+</body>
+</html>

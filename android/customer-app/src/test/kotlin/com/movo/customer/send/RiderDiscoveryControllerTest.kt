@@ -70,6 +70,17 @@ class RiderDiscoveryControllerTest {
     }
 
     @Test
+    fun out_of_service_area_is_a_distinct_phase_that_blocks_continue() = runTest {
+        val controller = RiderDiscoveryController { throw OutOfServiceAreaException("MOVO is not currently available at this location.") }
+
+        controller.scan(pickupA, online = true)
+
+        assertEquals(DiscoveryPhase.OutOfServiceArea, controller.snapshot.value.phase)
+        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertTrue(!controller.snapshot.value.canContinue())
+    }
+
+    @Test
     fun offline_clears_current_availability_without_calling_source() = runTest {
         var calls = 0
         val controller = RiderDiscoveryController {

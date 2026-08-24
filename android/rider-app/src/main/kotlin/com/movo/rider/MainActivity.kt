@@ -138,7 +138,17 @@ class MainActivity : ComponentActivity() {
                         JSONObject().put("phone", request.phone).put("full_name", request.fullName)
                             .put("password", request.password).put("role", "rider")
                             .put("national_id", request.nationalId).put("license_number", request.licenseNumber)
-                            .put("motorcycle_plate", request.motorcyclePlate)
+                            .put("vehicle_type", request.vehicleType)
+                            .apply {
+                                if (request.vehicleType == "car") {
+                                    put("car_plate", request.carPlate)
+                                    request.carMake.takeIf(String::isNotBlank)?.let { put("car_make", it) }
+                                    request.carModel.takeIf(String::isNotBlank)?.let { put("car_model", it) }
+                                    request.carColor.takeIf(String::isNotBlank)?.let { put("car_color", it) }
+                                } else {
+                                    put("motorcycle_plate", request.motorcyclePlate)
+                                }
+                            }
                     )
                     RiderAuthMode.VERIFY -> api.post(
                         "/api/auth/verify-otp",
@@ -307,6 +317,23 @@ class MainActivity : ComponentActivity() {
                                     busy = false
                                 }
                             },
+                            onAcceptRideOffer = { offer ->
+                                busy = true
+                                lifecycleScope.launch { controller.acceptRideOffer(offer); startLocationSharingIfOnline(); busy = false }
+                            },
+                            onDeclineRideOffer = { offer ->
+                                busy = true
+                                lifecycleScope.launch { controller.declineRideOffer(offer); busy = false }
+                            },
+                            onRideOfferExpired = { lifecycleScope.launch { controller.refresh() } },
+                            onAdvanceRide = { ride ->
+                                busy = true
+                                lifecycleScope.launch { controller.advanceRide(ride); busy = false }
+                            },
+                            onCancelRide = { ride ->
+                                busy = true
+                                lifecycleScope.launch { controller.cancelRide(ride); busy = false }
+                            },
                             onCall = ::dial,
                             onNavigate = ::navigateTo,
                             onAddProof = { proofPicker.launch("image/*") },
@@ -344,6 +371,10 @@ class MainActivity : ComponentActivity() {
                             onSaveMotorcycle = { updated ->
                                 busy = true
                                 lifecycleScope.launch { controller.saveMotorcycle(updated); busy = false }
+                            },
+                            onSaveCar = { updated ->
+                                busy = true
+                                lifecycleScope.launch { controller.saveCar(updated); busy = false }
                             },
                             onAvailabilityChange = { status ->
                                 busy = true

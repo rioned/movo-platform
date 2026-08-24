@@ -114,3 +114,53 @@ fun formatMinutes(minutes: Number?): String {
     val rest = total % 60
     return if (rest == 0) "${hours} h" else "${hours} h ${rest} min"
 }
+
+/** Generic money formatting for any currency code — "1,250 MZN", "12,500 RWF". */
+fun formatMoney(amount: Number?, currency: String): String {
+    val value = amount?.toDouble() ?: return "—"
+    val rounded = kotlin.math.round(value).toLong()
+    val digits = rounded.toString().reversed().chunked(3).joinToString(",").reversed()
+    return "$digits $currency"
+}
+
+/**
+ * The Yango-style ride-hailing trip lifecycle: request, driver match, pickup,
+ * the trip itself, and settlement — kept alongside [MovoDeliveryStage] so both
+ * apps describe a passenger trip with the same words and colour everywhere.
+ */
+enum class MovoRideStage(
+    val apiValue: String,
+    val customerLabel: String,
+    val driverLabel: String,
+    val shortLabel: String,
+    val step: Int,
+    val tone: MovoTone
+) {
+    Searching("searching", "Finding your driver", "Ride requested", "Matching", 0, MovoTone.Info),
+    Assigned("assigned", "Driver assigned", "Assigned", "Assigned", 1, MovoTone.Info),
+    DriverEnRoute("driver_en_route", "Driver on the way", "Heading to pickup", "En route", 2, MovoTone.Info),
+    ArrivedPickup("arrived_pickup", "Your driver has arrived", "At pickup", "Arrived", 3, MovoTone.Warning),
+    InProgress("in_progress", "Trip in progress", "Trip started", "On trip", 4, MovoTone.Info),
+    ArrivedDestination("arrived_destination", "You've arrived", "At destination", "Arrived", 5, MovoTone.Warning),
+    Completed("completed", "Trip completed", "Completed", "Completed", 6, MovoTone.Positive),
+    Cancelled("cancelled", "Ride cancelled", "Cancelled", "Cancelled", 6, MovoTone.Critical);
+
+    val isTerminal: Boolean get() = this == Completed || this == Cancelled
+
+    companion object {
+        fun from(value: String?): MovoRideStage =
+            entries.firstOrNull { it.apiValue.equals(value?.trim(), ignoreCase = true) } ?: Searching
+        val trackedSteps: List<String> = listOf("Requested", "Assigned", "To pickup", "Arrived", "On trip", "Completed")
+    }
+
+    val trackedStep: Int
+        get() = when (this) {
+            Searching -> 0
+            Assigned -> 1
+            DriverEnRoute -> 2
+            ArrivedPickup -> 3
+            InProgress -> 4
+            ArrivedDestination, Completed -> 5
+            Cancelled -> 5
+        }
+}

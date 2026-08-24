@@ -1,7 +1,7 @@
 /**
  * MOVO Platform — Complete Backend Server
- * Rwanda's Trusted Digital Logistics Platform
- * Parcel & Document Delivery | Kigali
+ * Mozambique's ride-hailing and digital logistics platform
+ * Passenger ride-hailing (Maputo) | Parcel & Document Delivery (Kigali)
  */
 
 const express = require('express');
@@ -37,6 +37,8 @@ const logger = createLogger({ level: runtime.logLevel, service: 'movo-api' });
 const metrics = createMetrics();
 const { createMessaging } = require('./src/services/messaging');
 const messaging = createMessaging({ provider: runtime.providers.sms, logger });
+const { createPayoutProvider } = require('./src/services/payouts');
+const payoutProvider = createPayoutProvider({ provider: runtime.providers.payout, logger });
 
 // The client-supplied original filename is never trusted for the stored path — it could
 // contain `../` traversal segments to write outside UPLOAD_DIR. The extension is derived
@@ -89,6 +91,10 @@ app.use('/customer', express.static(path.join(__dirname, 'public', 'customer')))
 app.use('/rider', express.static(path.join(__dirname, 'public', 'rider')));
 app.use('/business', express.static(path.join(__dirname, 'public', 'business')));
 app.use('/admin', express.static(path.join(__dirname, 'public', 'admin')));
+// Trip-sharing link (spec step 11): a contact with no MOVO account opens this page
+// to watch the shared trip; the token in the URL is read client-side and passed to
+// the public /api/track/share/:token endpoint.
+app.get('/track/:token', (req, res) => res.sendFile(path.join(__dirname, 'public', 'track', 'index.html')));
 
 // ─── Database Initialization ─────────────────────────────────
 const db = new Database(runtime.dbPath);
@@ -392,7 +398,27 @@ for (const migration of [
   "ALTER TABLE users ADD COLUMN last_login_at TEXT",
   "ALTER TABLE riders ADD COLUMN availability TEXT DEFAULT 'offline'",
   "ALTER TABLE riders ADD COLUMN accepted_offers INTEGER DEFAULT 0",
-  "ALTER TABLE riders ADD COLUMN declined_offers INTEGER DEFAULT 0"
+  "ALTER TABLE riders ADD COLUMN declined_offers INTEGER DEFAULT 0",
+  // Ride-hailing driver profile: a rider account can carry a car (or keep the
+  // existing motorcycle fields) to drive passenger trips.
+  "ALTER TABLE riders ADD COLUMN vehicle_type TEXT DEFAULT 'motorcycle'",
+  "ALTER TABLE riders ADD COLUMN car_make TEXT",
+  "ALTER TABLE riders ADD COLUMN car_model TEXT",
+  "ALTER TABLE riders ADD COLUMN car_color TEXT",
+  "ALTER TABLE riders ADD COLUMN car_plate TEXT",
+  "ALTER TABLE riders ADD COLUMN car_photo TEXT",
+  "ALTER TABLE riders ADD COLUMN total_rides INTEGER DEFAULT 0",
+  "ALTER TABLE rider_locations ADD COLUMN ride_id TEXT",
+  "ALTER TABLE payments ADD COLUMN ride_id TEXT",
+  "ALTER TABLE ratings ADD COLUMN ride_id TEXT",
+  "ALTER TABLE tickets ADD COLUMN ride_id TEXT",
+  // Zoning: an optional polygon service-area boundary (GeoJSON Polygon/MultiPolygon,
+  // [lng,lat] rings). Zones without one keep using the circular center+radius check.
+  // `version` is bumped whenever a zone's geometry changes so operators have a
+  // traceable record of when a service area moved (spec: zone management §50).
+  "ALTER TABLE delivery_zones ADD COLUMN boundary_geojson TEXT",
+  "ALTER TABLE delivery_zones ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE delivery_zones ADD COLUMN geometry_updated_at TEXT"
 ]) {
   try { db.exec(migration); } catch (error) {
     if (!String(error.message).includes('duplicate column name')) throw error;
@@ -402,6 +428,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS incidents (
     id TEXT PRIMARY KEY,
     delivery_id TEXT,
+    ride_id TEXT,
     reporter_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     severity TEXT NOT NULL DEFAULT 'medium',
@@ -414,6 +441,32 @@ db.exec(`
     resolved_at TEXT
   );
 
+  -- Rider payout obligations (spec §7A: financial architecture). One delivery
+  -- produces at most one payout row (UNIQUE delivery_id) and one payout reference
+  -- (UNIQUE reference) — retries reuse the existing row instead of creating a
+  -- second obligation, so payout creation and initiation are idempotent by
+  -- construction rather than by best-effort application logic.
+  CREATE TABLE IF NOT EXISTS payouts (
+    id TEXT PRIMARY KEY,
+    delivery_id TEXT UNIQUE NOT NULL REFERENCES deliveries(id),
+    rider_id TEXT NOT NULL REFERENCES users(id),
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'RWF',
+    reference TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING'
+      CHECK(status IN ('NOT_ELIGIBLE','PENDING','INITIATED','PROCESSING','COMPLETED','FAILED','REVERSED')),
+    provider TEXT,
+    provider_ref TEXT,
+    failure_reason TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_payouts_status ON payouts(status);
+  CREATE INDEX IF NOT EXISTS idx_payouts_rider ON payouts(rider_id,status);
+
   CREATE INDEX IF NOT EXISTS idx_deliveries_preferred_rider ON deliveries(preferred_rider_id,status);
   CREATE INDEX IF NOT EXISTS idx_riders_dispatch_eligibility ON riders(approval_status,online_status,last_location_update);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_idempotency ON deliveries(idempotency_actor_id,idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -424,6 +477,105 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_payments_delivery ON payments(delivery_id);
   CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
   CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status,created_at);
+`);
+
+for (const migration of [
+  "ALTER TABLE incidents ADD COLUMN ride_id TEXT"
+]) {
+  try { db.exec(migration); } catch (error) {
+    if (!String(error.message).includes('duplicate column name')) throw error;
+  }
+}
+
+// ─── Ride-hailing schema (Yango-style passenger trips) ────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ride_types (
+    id TEXT PRIMARY KEY,
+    key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    capacity INTEGER DEFAULT 4,
+    base_fare REAL NOT NULL,
+    per_km_rate REAL NOT NULL,
+    per_min_rate REAL NOT NULL DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS rides (
+    id TEXT PRIMARY KEY,
+    ride_no TEXT UNIQUE NOT NULL,
+    customer_id TEXT NOT NULL REFERENCES users(id),
+    driver_id TEXT REFERENCES users(id),
+    ride_type_id TEXT NOT NULL REFERENCES ride_types(id),
+    status TEXT NOT NULL DEFAULT 'searching',
+    pickup_address TEXT NOT NULL,
+    pickup_lat REAL NOT NULL,
+    pickup_lng REAL NOT NULL,
+    dest_address TEXT NOT NULL,
+    dest_lat REAL NOT NULL,
+    dest_lng REAL NOT NULL,
+    distance_km REAL,
+    estimated_minutes INTEGER,
+    base_fare REAL NOT NULL,
+    distance_fare REAL NOT NULL,
+    time_fare REAL NOT NULL DEFAULT 0,
+    total_fare REAL NOT NULL,
+    driver_earnings REAL NOT NULL,
+    platform_fee REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MZN',
+    payment_method TEXT DEFAULT 'cash',
+    payment_status TEXT DEFAULT 'pending',
+    payment_ref TEXT,
+    paid_at TEXT,
+    cancellation_fee REAL DEFAULT 0,
+    cancelled_at TEXT,
+    cancel_reason TEXT,
+    cancelled_by TEXT,
+    assigned_at TEXT,
+    driver_en_route_at TEXT,
+    arrived_pickup_at TEXT,
+    started_at TEXT,
+    arrived_dest_at TEXT,
+    completed_at TEXT,
+    share_contact_name TEXT,
+    share_contact_phone TEXT,
+    share_token TEXT UNIQUE,
+    customer_rating INTEGER,
+    customer_review TEXT,
+    rated_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS ride_events (
+    id TEXT PRIMARY KEY,
+    ride_id TEXT REFERENCES rides(id),
+    status TEXT NOT NULL,
+    lat REAL,
+    lng REAL,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS ride_offers (
+    id TEXT PRIMARY KEY,
+    ride_id TEXT NOT NULL REFERENCES rides(id),
+    driver_id TEXT NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'offered' CHECK(status IN ('offered','accepted','declined','expired')),
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    responded_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_rides_customer ON rides(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id);
+  CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
+  CREATE INDEX IF NOT EXISTS idx_rides_created ON rides(created_at);
+  CREATE INDEX IF NOT EXISTS idx_ride_events_ride ON ride_events(ride_id,created_at);
+  CREATE INDEX IF NOT EXISTS idx_ride_offers_driver ON ride_offers(driver_id,status,expires_at);
+  CREATE INDEX IF NOT EXISTS idx_rider_locations_ride ON rider_locations(ride_id,created_at);
 `);
 
 // ─── Seed Data ───────────────────────────────────────────────
@@ -482,10 +634,28 @@ function seedData() {
       ['platform_fee_percent','20'],['min_ride_price','800'],['cancel_fee_customer',500],
       ['cancel_fee_rider',0],['waiting_fee_per_min',100],['max_waiting_free_min',5],
       ['rider_accept_timeout_sec',30],['rider_search_radius_km',5],['rider_search_expand_km',2],
-      ['currency','RWF'],['currency_symbol','FRW']
+      ['currency','RWF'],['currency_symbol','FRW'],
+      // Ride-hailing (Maputo, Mozambique) pricing — kept separate from the parcel
+      // delivery config above so the two marketplaces can be tuned independently.
+      ['ride_platform_fee_percent','20'],['ride_min_fare','100'],
+      ['ride_cancel_fee_customer','50'],['ride_waiting_fee_per_min','5'],['ride_max_waiting_free_min','3'],
+      ['ride_driver_accept_timeout_sec','25'],['ride_driver_search_radius_km','6'],['ride_driver_search_expand_km','2'],
+      ['ride_avg_speed_kmh','24'],
+      ['ride_currency','MZN'],['ride_currency_symbol','MT']
     ];
     const insCfg = db.prepare('INSERT OR REPLACE INTO pricing_config (key,value) VALUES (?,?)');
     configs.forEach(c => insCfg.run(c[0], String(c[1])));
+  }
+  const rideTypeCount = db.prepare('SELECT COUNT(*) as c FROM ride_types').get();
+  if (rideTypeCount.c === 0) {
+    // Base fare / per-km / per-min in MZN, roughly in line with Maputo ride-hailing pricing.
+    const rideTypes = [
+      ['rt-economy','economy','Economy','Affordable everyday rides in a compact car',4,60,18,1,0],
+      ['rt-standard','standard','Standard','Comfortable sedan, the most popular choice',4,90,24,1.5,1],
+      ['rt-comfort','comfort','Comfort','Newer cars with extra legroom and amenities',4,130,32,2,2]
+    ];
+    const insRideType = db.prepare('INSERT INTO ride_types (id,key,name,description,capacity,base_fare,per_km_rate,per_min_rate,sort_order) VALUES (?,?,?,?,?,?,?,?,?)');
+    rideTypes.forEach(rt => insRideType.run(...rt));
   }
   if (process.env.LIVE_MAP_DEMO_MODE === 'true') seedLiveMapDemoData();
 }
@@ -569,7 +739,13 @@ function normalizePhone(phone) {
   if (/^07\d{8}$/.test(compact)) national = compact;
   else if (/^2507\d{8}$/.test(compact)) national = `0${compact.slice(3)}`;
   else if (/^\+2507\d{8}$/.test(compact)) national = `0${compact.slice(4)}`;
-  return national ? `+250${national.slice(1)}` : null;
+  if (national) return `+250${national.slice(1)}`;
+  // Mozambique mobile: +258 followed by a 9-digit subscriber number starting 82-87.
+  let mz;
+  if (/^8[2-7]\d{7}$/.test(compact)) mz = compact;
+  else if (/^2588[2-7]\d{7}$/.test(compact)) mz = compact.slice(3);
+  else if (/^\+2588[2-7]\d{7}$/.test(compact)) mz = compact.slice(4);
+  return mz ? `+258${mz}` : null;
 }
 
 db.function('normalize_phone', { deterministic: true }, normalizePhone);
@@ -612,6 +788,10 @@ function customerDeliveryView(user, delivery) {
   const receiver = isDeliveryReceiver(user, delivery);
   if (!sender || delivery.pickup_verified_at || ['picked_up','in_transit','arrived_dest','delivered'].includes(delivery.status)) delete view.pickup_otp;
   if (!receiver || delivery.status !== 'arrived_dest' || delivery.delivery_verified_at) delete view.delivery_otp;
+  // Rider payout and MOVO's service fee are internal financial obligations, never
+  // shown to the customer by default (spec §7A) — only the customer-facing fee.
+  delete view.rider_earnings;
+  delete view.platform_fee;
   return view;
 }
 
@@ -625,28 +805,68 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-function findZone(lat, lng) {
-  const zones = db.prepare('SELECT * FROM delivery_zones WHERE is_active=1 ORDER BY sort_order').all();
-  for (const z of zones) {
-    const d = haversine(lat, lng, z.center_lat, z.center_lng);
-    if (d <= z.radius_km) return z;
+/**
+ * Ray-casting point-in-polygon test over a single GeoJSON ring ([lng,lat] pairs).
+ * Standard even-odd algorithm; open or closed rings both work.
+ */
+function pointInRing(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    const intersects = ((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersects) inside = !inside;
   }
-  // Fallback: nearest zone
-  let nearest = null, minD = Infinity;
-  for (const z of zones) {
-    const d = haversine(lat, lng, z.center_lat, z.center_lng);
-    if (d < minD) { minD = d; nearest = z; }
-  }
-  return nearest;
+  return inside;
 }
 
+/**
+ * A point is in a zone's service area if it falls inside the zone's drawn
+ * boundary (preferred, when the admin has published one) or, for zones that
+ * still only have a center point, within its service radius. Zones are never
+ * assumed to cover a point just because they are the closest one — a point
+ * outside every configured zone is outside MOVO's service area, full stop.
+ */
+function pointInZone(lat, lng, zone) {
+  if (zone.boundary_geojson) {
+    let geom;
+    try { geom = JSON.parse(zone.boundary_geojson); } catch { geom = null; }
+    if (geom) {
+      const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+      for (const poly of polygons) {
+        const outerRing = poly && poly[0];
+        if (Array.isArray(outerRing) && pointInRing(lat, lng, outerRing)) return true;
+      }
+      return false;
+    }
+  }
+  return haversine(lat, lng, zone.center_lat, zone.center_lng) <= zone.radius_km;
+}
+
+/**
+ * Resolves the service zone a coordinate falls in, or null if it falls outside
+ * every active zone. There is deliberately no "nearest zone" fallback: silently
+ * mapping an out-of-area point to the closest zone would let customers create
+ * deliveries anywhere on the map and would misprice/misdispatch them. Callers
+ * must treat null as "MOVO is not currently available at this location."
+ */
+function findZone(lat, lng) {
+  const zones = db.prepare('SELECT * FROM delivery_zones WHERE is_active=1 ORDER BY sort_order').all();
+  return zones.find(z => pointInZone(lat, lng, z)) || null;
+}
+
+/**
+ * Returns a price breakdown, or { error } when the route can't be priced —
+ * either because a coordinate is outside every service zone, or because the
+ * zone pair itself has no active commercial pricing configured yet.
+ */
 function calcPrice(pickupLat, pickupLng, destLat, destLng, serviceType) {
   const oz = findZone(pickupLat, pickupLng);
   const dz = findZone(destLat, destLng);
-  if (!oz || !dz) return null;
+  if (!oz || !dz) return { error: 'out_of_service_area' };
   const pricing = db.prepare('SELECT * FROM zone_pricing WHERE origin_zone_id=? AND dest_zone_id=? AND is_active=1')
     .get(oz.id, dz.id);
-  if (!pricing) return null;
+  if (!pricing) return { error: 'route_unsupported' };
   const feePct = parseFloat(getConfig('platform_fee_percent', '20'));
   const base = serviceType === 'parcel' ? pricing.parcel_price : pricing.document_price;
   const minPrice = parseInt(getConfig('min_ride_price', '800'));
@@ -668,7 +888,16 @@ function addEvent(deliveryId, status, lat, lng, note) {
     .run(uuidv4(), deliveryId, status, lat, lng, note);
 }
 
-function updateDeliveryStatus(id, status, extra={}) {
+/**
+ * Applies a status transition. When `expectedStatus` is given, the UPDATE is a
+ * compare-and-swap on the current status — it only takes effect if the row is
+ * still in that state — and the caller gets back whether it actually applied.
+ * This closes the race where two concurrent requests (a double-tapped button,
+ * two devices on the same account) both read the same prior status and would
+ * otherwise both proceed to write side effects (payments, payouts, stats).
+ * Callers that don't pass it keep the previous unconditional-update behavior.
+ */
+function updateDeliveryStatus(id, status, extra={}, expectedStatus=null) {
   const sets = ['status=?','updated_at=datetime(\'now\')'];
   const vals = [status];
   const deliveryFields = new Set([
@@ -682,9 +911,53 @@ function updateDeliveryStatus(id, status, extra={}) {
     vals.push(v);
   }
   vals.push(id);
-  db.prepare(`UPDATE deliveries SET ${sets.join(',')} WHERE id=?`).run(...vals);
+  let sql = `UPDATE deliveries SET ${sets.join(',')} WHERE id=?`;
+  if (expectedStatus) { sql += ' AND status=?'; vals.push(expectedStatus); }
+  const result = db.prepare(sql).run(...vals);
+  if (expectedStatus && result.changes === 0) return false;
   addEvent(id, status, extra.lat, extra.lng, extra.note);
   emitDeliveryUpdate(id, { status });
+  return true;
+}
+
+/** `MOVO-PAYOUT-{order_no}` — the idempotent reference a retry must reuse rather than duplicate (spec §7A.4). */
+function payoutReference(orderNo) { return `MOVO-PAYOUT-${orderNo}`; }
+
+/**
+ * Idempotently creates the rider's payout obligation for a completed delivery
+ * and asks the payout provider to settle it. Insert uses the UNIQUE(delivery_id)
+ * and UNIQUE(reference) constraints on `payouts` as the actual idempotency
+ * guarantee — a duplicate call reuses the existing row instead of creating a
+ * second obligation, regardless of how it was triggered (retry, replay, race).
+ * The delivery itself stays DELIVERED even if the provider call fails; a failed
+ * or stuck payout is left for operations to see and retry (spec §7A.8).
+ */
+async function settlePayout(delivery) {
+  const reference = payoutReference(delivery.order_no);
+  const payoutId = uuidv4();
+  db.prepare(`INSERT OR IGNORE INTO payouts (id,delivery_id,rider_id,amount,currency,reference,status,provider)
+    VALUES (?,?,?,?,?,?,'PENDING',?)`)
+    .run(payoutId, delivery.id, delivery.rider_id, delivery.rider_earnings, getConfig('currency', 'RWF'), reference, payoutProvider.provider);
+  const payout = db.prepare('SELECT * FROM payouts WHERE delivery_id=?').get(delivery.id);
+
+  db.prepare("UPDATE payouts SET status='INITIATED', attempts=attempts+1, updated_at=datetime('now') WHERE id=?").run(payout.id);
+  let outcome;
+  try {
+    outcome = await payoutProvider.initiate(payout);
+  } catch (error) {
+    logger.error('payout_provider_error', { payoutId: payout.id, reference, message: error.message });
+    outcome = { status: 'FAILED', failureReason: error.message };
+  }
+  const finalStatus = outcome.status || 'FAILED';
+  db.prepare(`UPDATE payouts SET status=?, provider_ref=?, failure_reason=?, updated_at=datetime('now'),
+      completed_at=CASE WHEN ?='COMPLETED' THEN datetime('now') ELSE completed_at END WHERE id=?`)
+    .run(finalStatus, outcome.providerRef || null, outcome.failureReason || null, finalStatus, payout.id);
+  db.prepare("UPDATE payments SET status=? WHERE delivery_id=? AND type='rider_payout'")
+    .run(finalStatus === 'COMPLETED' ? 'completed' : finalStatus === 'FAILED' ? 'failed' : 'processing', delivery.id);
+  if (finalStatus === 'COMPLETED') {
+    db.prepare('UPDATE riders SET total_earnings=total_earnings+? WHERE user_id=?').run(delivery.rider_earnings, delivery.rider_id);
+  }
+  return db.prepare('SELECT * FROM payouts WHERE id=?').get(payout.id);
 }
 
 function notifyUser(userId, type, title, body, data=null) {
@@ -719,6 +992,102 @@ function notifyDeliveryParticipant(delivery, type, title, body) {
   }
   messaging.sendSms(delivery.dest_phone, body, { purpose: 'delivery_update', deliveryId: delivery.id })
     .catch(error => logger.warn('recipient_sms_failed', { deliveryId: delivery.id, message: error.message }));
+}
+
+// ─── Ride-hailing helpers ─────────────────────────────────────
+function genRideNo() { return 'RD' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(3).toString('hex').toUpperCase(); }
+
+function calcRideFare(pickupLat, pickupLng, destLat, destLng, rideType) {
+  const distanceKm = Math.round(haversine(pickupLat, pickupLng, destLat, destLng) * 10) / 10;
+  const avgSpeedKmh = parseFloat(getConfig('ride_avg_speed_kmh', '24')) || 24;
+  const estimatedMinutes = Math.max(3, Math.round((distanceKm / avgSpeedKmh) * 60));
+  const baseFare = rideType.base_fare;
+  const distanceFare = Math.round(distanceKm * rideType.per_km_rate);
+  const timeFare = Math.round(estimatedMinutes * rideType.per_min_rate);
+  const rawTotal = baseFare + distanceFare + timeFare;
+  const minFare = parseFloat(getConfig('ride_min_fare', '100')) || 100;
+  const totalFare = Math.max(Math.round(rawTotal), minFare);
+  const feePct = parseFloat(getConfig('ride_platform_fee_percent', '20'));
+  const platformFee = Math.round(totalFare * feePct / 100);
+  const driverEarnings = totalFare - platformFee;
+  return { distanceKm, estimatedMinutes, baseFare, distanceFare, timeFare, totalFare, platformFee, driverEarnings };
+}
+
+function addRideEvent(rideId, status, lat, lng, note) {
+  db.prepare('INSERT INTO ride_events (id,ride_id,status,lat,lng,note) VALUES (?,?,?,?,?,?)')
+    .run(uuidv4(), rideId, status, lat, lng, note);
+}
+
+function emitRideUpdate(rideId, payload = {}) {
+  io.to(`ride:${rideId}`).emit('ride_update', { ride_id: rideId, ...payload });
+}
+
+const RIDE_UPDATE_FIELDS = new Set([
+  'driver_id', 'assigned_at', 'driver_en_route_at', 'arrived_pickup_at', 'started_at',
+  'arrived_dest_at', 'completed_at', 'payment_status', 'payment_ref', 'paid_at',
+  'cancelled_at', 'cancel_reason', 'cancelled_by'
+]);
+
+function updateRideStatus(id, status, extra = {}) {
+  const sets = ['status=?', "updated_at=datetime('now')"];
+  const vals = [status];
+  for (const [k, v] of Object.entries(extra)) {
+    if (!RIDE_UPDATE_FIELDS.has(k)) continue;
+    sets.push(`${k}=?`);
+    vals.push(v);
+  }
+  vals.push(id);
+  db.prepare(`UPDATE rides SET ${sets.join(',')} WHERE id=?`).run(...vals);
+  addRideEvent(id, status, extra.lat, extra.lng, extra.note);
+  emitRideUpdate(id, { status });
+}
+
+function eligibleNearbyDrivers(lat, lng, radiusKm) {
+  const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
+  const drivers = db.prepare(`SELECT u.id,u.full_name,u.avatar,r.avg_rating,r.rating_count,r.vehicle_type,
+      r.car_make,r.car_model,r.car_color,r.car_plate,r.motorcycle_plate,
+      r.current_lat,r.current_lng,r.last_location_update,
+      (SELECT COUNT(*) FROM deliveries d WHERE d.rider_id=r.user_id AND d.status NOT IN ('delivered','cancelled','failed')) AS active_deliveries,
+      (SELECT COUNT(*) FROM rides ri WHERE ri.driver_id=r.user_id AND ri.status NOT IN ('completed','cancelled')) AS active_rides
+    FROM users u JOIN riders r ON r.user_id=u.id
+    WHERE u.status='active' AND r.approval_status='approved' AND r.online_status='online'
+      AND r.current_lat BETWEEN -90 AND 90 AND r.current_lng BETWEEN -180 AND 180
+      AND r.last_location_update >= datetime('now', ?)`)
+    .all(`-${freshnessSeconds} seconds`);
+  return drivers
+    .filter(driver => driver.active_deliveries === 0 && driver.active_rides === 0)
+    .map(driver => ({ ...driver, distance_km: Math.round(haversine(lat, lng, driver.current_lat, driver.current_lng) * 100) / 100 }))
+    .filter(driver => driver.distance_km <= radiusKm)
+    .sort((a, b) => a.distance_km - b.distance_km)
+    .map(({ active_deliveries, active_rides, ...driver }) => driver);
+}
+
+function canAccessRide(user, ride) {
+  if (!user || !ride) return false;
+  if (user.role === 'admin') return true;
+  if (user.role === 'rider') return ride.driver_id === user.id;
+  return user.role === 'customer' && ride.customer_id === user.id;
+}
+
+function rideDriverSummary(driverId) {
+  if (!driverId) return null;
+  const driver = db.prepare(`SELECT u.full_name,u.avatar,u.phone,r.avg_rating,r.rating_count,r.vehicle_type,
+    r.car_make,r.car_model,r.car_color,r.car_plate,r.motorcycle_plate,r.profile_photo
+    FROM users u JOIN riders r ON u.id=r.user_id WHERE u.id=?`).get(driverId);
+  if (!driver) return null;
+  return { ...driver, profile_photo_url: driver.profile_photo ? `/api/rider/documents/${driverId}/profile` : null, profile_photo: undefined };
+}
+
+/**
+ * Trip-sharing (spec: "share the trip with a contact") issues a random, unguessable
+ * token that resolves through the public /api/track/share/:token endpoint — no
+ * account or JWT required, since the contact receiving the link is not a MOVO user.
+ */
+function ensureShareToken(ride) {
+  if (ride.share_token) return ride.share_token;
+  const token = crypto.randomBytes(16).toString('hex');
+  db.prepare("UPDATE rides SET share_token=? WHERE id=?").run(token, ride.id);
+  return token;
 }
 
 // ─── Auth Middleware ─────────────────────────────────────────
@@ -786,14 +1155,19 @@ function authProfile(user) {
 // ─── AUTH ROUTES ─────────────────────────────────────────────
 app.post('/api/auth/register', route(async (req, res) => {
   {
-    const { phone, full_name, email, password, role, company_name, tax_id, national_id, license_number, motorcycle_plate } = req.body;
+    const { phone, full_name, email, password, role, company_name, tax_id, national_id, license_number, motorcycle_plate, vehicle_type, car_plate, car_make, car_model, car_color } = req.body;
     if (!phone || !full_name || !role) return resErr(res, 'Phone, name, and role are required', 400, 'missing_field');
     const canonicalPhone = normalizePhone(phone);
-    if (!canonicalPhone) return resErr(res, 'Enter a valid Rwanda mobile number', 400, 'invalid_phone');
+    if (!canonicalPhone) return resErr(res, 'Enter a valid Rwanda or Mozambique mobile number', 400, 'invalid_phone');
     if (!['customer','rider','business'].includes(role)) return resErr(res, 'Invalid role', 400, 'unsupported_value');
     if (password) validate.password(password);
     if (role === 'business' && !company_name?.trim()) return resErr(res, 'Company name is required', 400, 'missing_field');
-    if (role === 'rider' && (!national_id?.trim() || !license_number?.trim() || !motorcycle_plate?.trim())) return resErr(res, 'National ID, license number, and motorcycle plate are required', 400, 'missing_field');
+    // A rider account earns either as a delivery courier (motorcycle) or a ride-hailing
+    // driver (car) — 'vehicle_type' picks which document set is required at signup.
+    const vehicleType = role === 'rider' ? (vehicle_type === 'car' ? 'car' : 'motorcycle') : null;
+    if (role === 'rider' && (!national_id?.trim() || !license_number?.trim())) return resErr(res, 'National ID and license number are required', 400, 'missing_field');
+    if (role === 'rider' && vehicleType === 'motorcycle' && !motorcycle_plate?.trim()) return resErr(res, 'Motorcycle plate is required', 400, 'missing_field');
+    if (role === 'rider' && vehicleType === 'car' && !car_plate?.trim()) return resErr(res, 'Car plate is required', 400, 'missing_field');
     if (db.prepare('SELECT id FROM users WHERE phone=?').get(canonicalPhone)) return resErr(res, 'Phone number already registered', 409, 'phone_taken');
     // Hashing happens off the event loop (async bcrypt) before the synchronous DB transaction,
     // since better-sqlite3 transactions can't span an await.
@@ -804,7 +1178,11 @@ app.post('/api/auth/register', route(async (req, res) => {
     const create = db.transaction(() => {
       db.prepare("INSERT INTO users (id,phone,email,password,full_name,role,otp_code,otp_expires) VALUES (?,?,?,?,?,?,?,datetime('now','+10 minutes'))")
         .run(id, canonicalPhone, email || null, hash, full_name.trim(), role, otpHash);
-      if (role === 'rider') db.prepare('INSERT INTO riders (user_id,national_id,license_number,motorcycle_plate) VALUES (?,?,?,?)').run(id, national_id.trim(), license_number.trim(), motorcycle_plate.trim().toUpperCase());
+      if (role === 'rider') {
+        db.prepare('INSERT INTO riders (user_id,national_id,license_number,motorcycle_plate,vehicle_type,car_plate,car_make,car_model,car_color) VALUES (?,?,?,?,?,?,?,?,?)')
+          .run(id, national_id.trim(), license_number.trim(), vehicleType === 'motorcycle' ? motorcycle_plate.trim().toUpperCase() : null,
+            vehicleType, vehicleType === 'car' ? car_plate.trim().toUpperCase() : null, car_make?.trim() || null, car_model?.trim() || null, car_color?.trim() || null);
+      }
       if (role === 'business') db.prepare('INSERT INTO businesses (user_id,company_name,tax_id) VALUES (?,?,?)').run(id, company_name.trim(), tax_id?.trim() || null);
     });
     create();
@@ -947,7 +1325,8 @@ app.delete('/api/addresses/:id', auth, (req, res) => {
 app.put('/api/rider/profile', auth, roleAuth('rider'), (req, res) => {
   try {
     const fields = ['national_id','license_number','motorcycle_plate','motorcycle_make','motorcycle_type','motorcycle_color',
-      'insurance_number','insurance_expiry','emergency_name','emergency_phone'];
+      'insurance_number','insurance_expiry','emergency_name','emergency_phone',
+      'vehicle_type','car_plate','car_make','car_model','car_color'];
     const updates = []; const vals = [];
     for (const f of fields) {
       if (req.body[f] !== undefined) { updates.push(`${f}=?`); vals.push(req.body[f]); }
@@ -1006,7 +1385,8 @@ app.put('/api/rider/status', auth, roleAuth('rider'), route((req, res) => {
     ? validate.oneOf(req.body.status, RIDER_AVAILABILITY, 'status')
     : (req.body.online ? 'online' : 'offline');
   const active = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status NOT IN ('delivered','cancelled','failed')").get(req.user.id);
-  if (active && requested !== 'busy') return resErr(res, 'Finish or hand back your active delivery before changing availability', 409, 'active_delivery');
+  const activeRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status NOT IN ('completed','cancelled')").get(req.user.id);
+  if ((active || activeRide) && requested !== 'busy') return resErr(res, 'Finish or hand back your active delivery/ride before changing availability', 409, 'active_delivery');
   db.prepare("UPDATE riders SET online_status=?,availability=?,updated_at=datetime('now') WHERE user_id=?").run(requested, requested, req.user.id);
   audit(req.user.id, 'rider_availability_changed', 'rider', req.user.id, { from: rider.online_status, to: requested });
   resOK(res, { online_status: requested, availability: requested, accepting_offers: requested === 'online' });
@@ -1065,19 +1445,25 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   if (!rider || rider.approval_status !== 'approved' || !['online','busy'].includes(rider.online_status)) return resErr(res, 'Approved online rider required', 403);
   db.prepare('UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime(\'now\') WHERE user_id=?')
     .run(lat, lng, req.user.id);
-  const active = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
-  db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,lat,lng) VALUES (?,?,?,?,?)').run(uuidv4(), req.user.id, active?.id || null, lat, lng);
-  if (active) io.to(`delivery:${active.id}`).emit('rider_location', { delivery_id: active.id, lat: Number(lat), lng: Number(lng) });
+  const activeDelivery = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
+  const activeRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
+  db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng) VALUES (?,?,?,?,?,?)').run(uuidv4(), req.user.id, activeDelivery?.id || null, activeRide?.id || null, lat, lng);
+  if (activeDelivery) io.to(`delivery:${activeDelivery.id}`).emit('rider_location', { delivery_id: activeDelivery.id, lat: Number(lat), lng: Number(lng) });
+  if (activeRide) io.to(`ride:${activeRide.id}`).emit('driver_location', { ride_id: activeRide.id, lat: Number(lat), lng: Number(lng) });
   resOK(res, { message: 'Location updated' });
 });
 
 app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
   expireSelectedOffers();
-  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
+  expireRideOffers();
+  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_rides,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.vehicle_type,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,r.car_make,r.car_model,r.car_color,r.car_plate,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
   const activeDelivery = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
+  const activeRide = db.prepare("SELECT * FROM rides WHERE driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
   const offers = db.prepare(`SELECT o.id as offer_id,o.expires_at,d.id,d.order_no,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,d.pickup_name,d.pickup_phone,d.dest_address,d.dest_lat,d.dest_lng,d.dest_name,d.dest_phone,d.rider_earnings,d.distance_km
     FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id WHERE o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
-  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, offers, serverTime: new Date().toISOString() });
+  const rideOffers = db.prepare(`SELECT o.id as offer_id,o.expires_at,r.id,r.ride_no,r.pickup_address,r.pickup_lat,r.pickup_lng,r.dest_address,r.dest_lat,r.dest_lng,r.driver_earnings,r.distance_km,r.estimated_minutes
+    FROM ride_offers o JOIN rides r ON r.id=o.ride_id WHERE o.driver_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
+  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, activeRide, offers, rideOffers, serverTime: new Date().toISOString() });
 });
 
 app.put('/api/mobile/v1/rider/offers/:offerId/decline', auth, roleAuth('rider'), (req, res) => {
@@ -1092,6 +1478,30 @@ app.put('/api/mobile/v1/rider/offers/:offerId/decline', auth, roleAuth('rider'),
   resOK(res, { message: 'Offer declined' });
 });
 
+app.get('/api/mobile/v1/rider/ride-offers', auth, roleAuth('rider'), route((req, res) => {
+  expireRideOffers();
+  const offers = db.prepare(`SELECT o.id AS offer_id,o.expires_at,o.created_at,
+      r.id,r.ride_no,r.pickup_address,r.pickup_lat,r.pickup_lng,r.dest_address,r.dest_lat,r.dest_lng,
+      r.driver_earnings,r.distance_km,r.estimated_minutes
+    FROM ride_offers o JOIN rides r ON r.id=o.ride_id
+    WHERE o.driver_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
+  resOK(res, { offers, serverTime: new Date().toISOString() });
+}));
+
+app.put('/api/mobile/v1/rider/ride-offers/:offerId/decline', auth, roleAuth('rider'), (req, res) => {
+  const offer = db.prepare("SELECT id FROM ride_offers WHERE id=? AND driver_id=? AND status='offered' AND expires_at>datetime('now')").get(req.params.offerId, req.user.id);
+  if (!offer) return resErr(res, 'Offer is unavailable', 409);
+  db.prepare("UPDATE ride_offers SET status='declined',responded_at=datetime('now') WHERE id=?").run(offer.id);
+  db.prepare('UPDATE riders SET declined_offers=COALESCE(declined_offers,0)+1 WHERE user_id=?').run(req.user.id);
+  resOK(res, { message: 'Offer declined' });
+});
+
+app.get('/api/rider/active-ride', auth, roleAuth('rider'), (req, res) => {
+  const r = db.prepare("SELECT * FROM rides WHERE driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination') ORDER BY created_at DESC LIMIT 1")
+    .get(req.user.id);
+  resOK(res, r || null);
+});
+
 app.get('/api/rider/earnings', auth, roleAuth('rider'), (req, res) => {
   const { period } = req.query;
   let dateFilter = '';
@@ -1102,9 +1512,16 @@ app.get('/api/rider/earnings', auth, roleAuth('rider'), (req, res) => {
   const stats = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(rider_earnings),0) as total_earnings,
     COALESCE(SUM(platform_fee),0) as total_fees FROM deliveries d WHERE d.rider_id=? AND d.status='delivered' ${dateFilter}`)
     .get(req.user.id);
-  const recent = db.prepare(`SELECT d.id,d.order_no,d.service_type,d.rider_earnings,d.delivered_at,d.pickup_address,d.dest_address
-    FROM deliveries d WHERE d.rider_id=? AND d.status='delivered' ${dateFilter} ORDER BY d.delivered_at DESC LIMIT 20`).all(req.user.id);
-  resOK(res, { ...stats, recent });
+  // Payout status comes from the payouts ledger, not the delivery row — a
+  // DELIVERED delivery with a still-PROCESSING payout is normal (spec §7A.5)
+  // and must not read as if the rider was never paid.
+  const recent = db.prepare(`SELECT d.id,d.order_no,d.service_type,d.rider_earnings,d.delivered_at,d.pickup_address,d.dest_address,
+      COALESCE(p.status,'PENDING') as payout_status, p.reference as payout_reference, p.completed_at as payout_completed_at
+    FROM deliveries d LEFT JOIN payouts p ON p.delivery_id=d.id
+    WHERE d.rider_id=? AND d.status='delivered' ${dateFilter} ORDER BY d.delivered_at DESC LIMIT 20`).all(req.user.id);
+  const payoutBreakdown = db.prepare(`SELECT COALESCE(p.status,'PENDING') as status, COUNT(*) as count, COALESCE(SUM(d.rider_earnings),0) as amount
+    FROM deliveries d LEFT JOIN payouts p ON p.delivery_id=d.id WHERE d.rider_id=? AND d.status='delivered' ${dateFilter} GROUP BY 1`).all(req.user.id);
+  resOK(res, { ...stats, recent, payout_breakdown: payoutBreakdown });
 });
 
 app.get('/api/rider/performance', auth, roleAuth('rider'), (req, res) => {
@@ -1213,8 +1630,12 @@ app.post('/api/deliveries/price', auth, (req, res) => {
     if (!pickup_lat || !pickup_lng || !dest_lat || !dest_lng || !service_type)
       return resErr(res, 'Pickup and destination coordinates and service type required');
     const price = calcPrice(pickup_lat, pickup_lng, dest_lat, dest_lng, service_type);
-    if (!price) return resErr(res, 'Cannot calculate price for this route');
-    resOK(res, price);
+    if (price.error === 'out_of_service_area') return resErr(res, 'MOVO is not currently available at this location.', 422, 'out_of_service_area');
+    if (price.error) return resErr(res, 'Cannot calculate price for this route', 422, price.error);
+    // Only operations/admin get the full commercial breakdown (spec §52 pricing
+    // simulator). A customer or business quote never includes the rider's payout.
+    if (req.user.role === 'admin') resOK(res, price);
+    else { const { riderEarnings, platformFee, ...customerFacing } = price; resOK(res, customerFacing); }
   } catch(e) { resErr(res, e.message); }
 });
 
@@ -1271,7 +1692,15 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
     return resErr(res, 'Valid latitude and longitude required');
   if (!Number.isFinite(requestedRadius) || requestedRadius <= 0) return resErr(res, 'Valid radius required');
   const radiusKm = Math.min(requestedRadius, 20);
-  resOK(res, { riders: eligibleNearbyRiders(lat, lng, radiusKm), radius_km: radiusKm, serverTime: new Date().toISOString() });
+  // Zone resolution happens right where the customer picks a pickup point (spec
+  // §12), not later at quote time — otherwise "no riders nearby" and "MOVO
+  // doesn't operate here at all" look identical to the client.
+  const zone = findZone(lat, lng);
+  resOK(res, {
+    riders: eligibleNearbyRiders(lat, lng, radiusKm), radius_km: radiusKm,
+    in_service_area: Boolean(zone), zone: zone ? { id: zone.id, name: zone.name } : null,
+    serverTime: new Date().toISOString()
+  });
 });
 
 app.get('/api/mobile/v1/customer/home', auth, roleAuth('customer'), (req, res) => {
@@ -1325,7 +1754,10 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
   const destPhone = validate.requiredPhone(dest_phone, 'dest_phone');
 
   const price = calcPrice(pickupLat, pickupLng, destLat, destLng, service_type);
-  if (!price) throw new ValidationError('Cannot calculate price for this route', { code: 'route_unsupported' });
+  if (price.error === 'out_of_service_area') {
+    throw new ValidationError('MOVO is not currently available at this location.', { code: 'out_of_service_area', status: 422 });
+  }
+  if (price.error) throw new ValidationError('Cannot calculate price for this route', { code: price.error, status: 422 });
   if (preferred_rider_id) {
     const selectionRadius = Math.min(20, parseFloat(getConfig('rider_search_radius_km', '5')) || 5);
     const eligible = eligibleNearbyRiders(pickupLat, pickupLng, selectionRadius).some(rider => rider.id === preferred_rider_id);
@@ -1445,7 +1877,17 @@ app.get('/api/deliveries/:id', auth, (req, res) => {
   if (!d) return resErr(res, 'Delivery not found', 404);
   if (!canAccessDelivery(req.user, d)) return resErr(res, 'Not found', 404);
   const events = db.prepare('SELECT * FROM delivery_events WHERE delivery_id=? ORDER BY created_at').all(d.id);
-  resOK(res, { delivery: deliveryView(req.user, d), events });
+  const response = { delivery: deliveryView(req.user, d), events };
+  // Payout visibility follows spec §7A: the rider sees only their own payout
+  // status/reference, never the customer's fee; admin sees the full picture;
+  // the customer never sees the rider payout at all.
+  if (req.user.role === 'rider' && d.rider_id === req.user.id) {
+    const payout = db.prepare('SELECT status,reference,amount,currency,completed_at FROM payouts WHERE delivery_id=?').get(d.id);
+    response.payout = payout || null;
+  } else if (req.user.role === 'admin') {
+    response.payout = db.prepare('SELECT * FROM payouts WHERE delivery_id=?').get(d.id) || null;
+  }
+  resOK(res, response);
 });
 
 app.get('/api/deliveries/:id/track', auth, (req, res) => {
@@ -1542,35 +1984,47 @@ app.put('/api/deliveries/:id/arrive-dest', auth, roleAuth('rider'), (req, res) =
   resOK(res, { message: 'Arrived at destination' });
 });
 
-app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), otpHandoverLimiter, route((req, res) => {
+app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), otpHandoverLimiter, route(async (req, res) => {
   const d = db.prepare("SELECT * FROM deliveries WHERE id=? AND rider_id=? AND status='arrived_dest'").get(req.params.id, req.user.id);
   if (!d) return resErr(res, 'Delivery not found', 404, 'delivery_not_found');
   const { otp, photo, recipient_name, notes, signature } = req.body;
   if (d.delivery_otp && otp !== d.delivery_otp) return resErr(res, 'Invalid delivery OTP', 400, 'invalid_otp');
   const now = new Date().toISOString();
   const podReference = `POD-${d.order_no}`;
-  const settle = db.transaction(() => {
-    updateDeliveryStatus(d.id, 'delivered', {
+  // The CAS below (expectedStatus) is what actually makes a duplicate/racing
+  // completion request a no-op instead of a double settlement (spec Test 14):
+  // only the request that observes the transition from arrived_dest gets to
+  // write the payments/payout rows at all.
+  const applied = db.transaction(() => {
+    const moved = updateDeliveryStatus(d.id, 'delivered', {
       delivery_verified_at: now, delivery_photo: photo || d.delivery_photo || null,
       recipient_name: recipient_name || d.dest_name, delivery_notes: notes || null,
       delivered_at: now, payment_status: 'paid', paid_at: now
-    });
+    }, 'arrived_dest');
+    if (!moved) return false;
     db.prepare("UPDATE deliveries SET pod_reference=? WHERE id=?").run(podReference, d.id);
     if (signature) db.prepare("UPDATE deliveries SET delivery_notes=COALESCE(delivery_notes,'') || ? WHERE id=?")
       .run(` | signed: ${String(signature).slice(0, 120)}`, d.id);
-    db.prepare("UPDATE riders SET total_deliveries=total_deliveries+1, total_earnings=total_earnings+?, online_status='online', availability='online', updated_at=datetime('now') WHERE user_id=?")
-      .run(d.rider_earnings, req.user.id);
-    // Settlement split (spec §10 stage 9): customer charge, rider payout, platform fee.
+    db.prepare("UPDATE riders SET total_deliveries=total_deliveries+1, online_status='online', availability='online', updated_at=datetime('now') WHERE user_id=?")
+      .run(req.user.id);
+    // Customer charge and platform fee settle immediately; the rider payout is a
+    // separate obligation (see settlePayout) that can fail/retry independently
+    // without the delivery or these two ledger entries being rolled back.
     const payment = db.prepare('INSERT INTO payments (id,delivery_id,user_id,amount,type,method,status,processed_at) VALUES (?,?,?,?,?,?,?,?)');
-    payment.run(uuidv4(), d.id, req.user.id, d.rider_earnings, 'rider_payout', 'mobile_money', 'completed', now);
+    payment.run(uuidv4(), d.id, req.user.id, d.rider_earnings, 'rider_payout', 'mobile_money', 'pending', null);
     payment.run(uuidv4(), d.id, d.customer_id, d.total_charge, 'customer_pay', d.payment_method, 'completed', now);
     payment.run(uuidv4(), d.id, d.customer_id, d.platform_fee, 'platform_fee', d.payment_method, 'completed', now);
-  });
-  settle();
+    return true;
+  })();
+  if (!applied) return resErr(res, 'This delivery was already completed', 409, 'already_completed');
+
   notifyUser(d.customer_id, 'delivered', 'Delivery Completed', `Your ${d.service_type} has been delivered! Order: ${d.order_no}`, { delivery_id: d.id, pod_reference: podReference });
   notifyDeliveryParticipant(d, 'delivered', 'Delivery completed', `Your MOVO ${d.service_type} (${d.order_no}) was delivered. Proof of delivery: ${podReference}.`);
   audit(req.user.id, 'delivery_completed', 'delivery', d.id, { pod: podReference });
-  resOK(res, { message: 'Delivery completed', pod_reference: podReference });
+
+  const payout = await settlePayout(d);
+  audit(req.user.id, 'payout_settlement_attempted', 'payout', payout.id, { delivery_id: d.id, status: payout.status, reference: payout.reference });
+  resOK(res, { message: 'Delivery completed', pod_reference: podReference, payout: { status: payout.status, reference: payout.reference } });
 }));
 
 app.put('/api/deliveries/:id/cancel', auth, route((req, res) => {
@@ -1692,21 +2146,331 @@ app.post('/api/payments/process', auth, (req, res) => {
   } catch(e) { resErr(res, e.message); }
 });
 
+// ─── RIDE-HAILING ROUTES (Yango-style passenger trips) ───────
+app.get('/api/ride-types', (req, res) => {
+  resOK(res, db.prepare('SELECT * FROM ride_types WHERE is_active=1 ORDER BY sort_order').all());
+});
+
+// Step 6 of the client flow: show every ride category with its estimated price and ETA
+// before the rider commits, so the choice is made with full information up front.
+app.post('/api/rides/estimate', auth, roleAuth('customer'), route((req, res) => {
+  const pickupLat = validate.latitude(req.body.pickup_lat, 'pickup_lat');
+  const pickupLng = validate.longitude(req.body.pickup_lng, 'pickup_lng');
+  const destLat = validate.latitude(req.body.dest_lat, 'dest_lat');
+  const destLng = validate.longitude(req.body.dest_lng, 'dest_lng');
+  const rideTypes = db.prepare('SELECT * FROM ride_types WHERE is_active=1 ORDER BY sort_order').all();
+  const currency = getConfig('ride_currency', 'MZN');
+  const estimates = rideTypes.map(rt => {
+    const fare = calcRideFare(pickupLat, pickupLng, destLat, destLng, rt);
+    return {
+      ride_type_id: rt.id, key: rt.key, name: rt.name, description: rt.description, capacity: rt.capacity,
+      distance_km: fare.distanceKm, estimated_minutes: fare.estimatedMinutes, fare: fare.totalFare, currency
+    };
+  });
+  resOK(res, { estimates, currency, serverTime: new Date().toISOString() });
+}));
+
+function rideView(user, ride) {
+  const view = { ...ride };
+  if (user.role !== 'admin' && user.id !== ride.customer_id) delete view.share_token;
+  return view;
+}
+
+app.post('/api/rides', auth, roleAuth('customer'), route((req, res) => {
+  const { pickup_address, pickup_lat, pickup_lng, dest_address, dest_lat, dest_lng, ride_type_id, payment_method, share_contact_name, share_contact_phone } = req.body;
+  if (!pickup_address || !dest_address) throw new ValidationError('Pickup and destination addresses are required', { code: 'missing_field' });
+  const pickupLat = validate.latitude(pickup_lat, 'pickup_lat');
+  const pickupLng = validate.longitude(pickup_lng, 'pickup_lng');
+  const destLat = validate.latitude(dest_lat, 'dest_lat');
+  const destLng = validate.longitude(dest_lng, 'dest_lng');
+  const rideType = db.prepare('SELECT * FROM ride_types WHERE id=? AND is_active=1').get(ride_type_id);
+  if (!rideType) throw new ValidationError('Select a valid ride type', { code: 'unsupported_value', field: 'ride_type_id' });
+  const method = validate.oneOf(payment_method, ['cash', 'card', 'mpesa'], 'payment_method', { optional: true }) || 'cash';
+  const active = db.prepare("SELECT id FROM rides WHERE customer_id=? AND status NOT IN ('completed','cancelled')").get(req.user.id);
+  if (active) throw new ValidationError('You already have a ride in progress', { code: 'active_ride', status: 409 });
+
+  const fare = calcRideFare(pickupLat, pickupLng, destLat, destLng, rideType);
+  const id = uuidv4();
+  const rideNo = genRideNo();
+  const currency = getConfig('ride_currency', 'MZN');
+  db.prepare(`INSERT INTO rides (
+    id,ride_no,customer_id,ride_type_id,status,pickup_address,pickup_lat,pickup_lng,dest_address,dest_lat,dest_lng,
+    distance_km,estimated_minutes,base_fare,distance_fare,time_fare,total_fare,driver_earnings,platform_fee,currency,
+    payment_method,share_contact_name,share_contact_phone
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, rideNo, req.user.id, rideType.id, 'searching', pickup_address, pickupLat, pickupLng, dest_address, destLat, destLng,
+    fare.distanceKm, fare.estimatedMinutes, fare.baseFare, fare.distanceFare, fare.timeFare, fare.totalFare, fare.driverEarnings, fare.platformFee, currency,
+    method, validate.optionalString(share_contact_name, 'share_contact_name', { max: 120 }), share_contact_phone ? (normalizePhone(share_contact_phone) || share_contact_phone) : null
+  );
+  addRideEvent(id, 'searching', pickupLat, pickupLng, 'Ride requested, searching for a driver');
+  dispatchRide(id);
+  resOK(res, { ride: rideView(req.user, db.prepare('SELECT * FROM rides WHERE id=?').get(id)), message: 'Searching for the nearest driver...' }, 201);
+}));
+
+app.get('/api/rides', auth, route((req, res) => {
+  const { limit, offset } = validate.pagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+  const column = req.user.role === 'rider' ? 'driver_id' : req.user.role === 'admin' ? null : 'customer_id';
+  let query = column ? `SELECT * FROM rides WHERE ${column}=?` : 'SELECT * FROM rides';
+  const params = column ? [req.user.id] : [];
+  if (req.query.status) { query += `${column ? ' AND' : ' WHERE'} status=?`; params.push(String(req.query.status).slice(0, 40)); }
+  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  resOK(res, db.prepare(query).all(...params).map(ride => rideView(req.user, ride)));
+}));
+
+app.get('/api/rides/:id', auth, (req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
+  if (!ride || !canAccessRide(req.user, ride)) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  const events = db.prepare('SELECT * FROM ride_events WHERE ride_id=? ORDER BY created_at').all(ride.id);
+  resOK(res, { ride: rideView(req.user, ride), events, driver: rideDriverSummary(ride.driver_id) });
+});
+
+// Steps 8-9: driver identity (name, photo, rating, car model/color/plate) plus live location.
+app.get('/api/rides/:id/track', auth, (req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
+  if (!ride || !canAccessRide(req.user, ride)) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  let driverLoc = ride.driver_id ? db.prepare('SELECT lat,lng,created_at FROM rider_locations WHERE rider_id=? AND ride_id=? ORDER BY created_at DESC LIMIT 1').get(ride.driver_id, ride.id) : null;
+  if (!driverLoc && ride.driver_id && !['completed', 'cancelled'].includes(ride.status)) {
+    driverLoc = db.prepare('SELECT current_lat AS lat,current_lng AS lng,last_location_update AS created_at FROM riders WHERE user_id=?').get(ride.driver_id) || null;
+  }
+  resOK(res, { ride: rideView(req.user, ride), driver: rideDriverSummary(ride.driver_id), driverLocation: driverLoc, serverTime: new Date().toISOString() });
+});
+
+app.put('/api/rides/:id/accept', auth, roleAuth('rider'), route((req, res) => {
+  const ride = db.prepare("SELECT * FROM rides WHERE id=? AND status='searching'").get(req.params.id);
+  if (!ride) return resErr(res, 'Ride is not available', 409, 'ride_unavailable');
+  const driver = db.prepare('SELECT * FROM riders WHERE user_id=?').get(req.user.id);
+  if (!driver || driver.approval_status !== 'approved') return resErr(res, 'Driver not approved', 403, 'rider_not_approved');
+  if (driver.online_status !== 'online') return resErr(res, 'Go online first', 409, 'not_online');
+  const activeDelivery = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status NOT IN ('delivered','cancelled','failed')").get(req.user.id);
+  const activeRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status NOT IN ('completed','cancelled')").get(req.user.id);
+  if (activeDelivery || activeRide) return resErr(res, 'You already have an active job', 409, 'active_job');
+  const claimed = db.transaction(() => {
+    const offer = db.prepare("SELECT id FROM ride_offers WHERE ride_id=? AND driver_id=? AND status='offered' AND expires_at>datetime('now')").get(ride.id, req.user.id);
+    if (!offer) return false;
+    const updated = db.prepare("UPDATE rides SET driver_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status='searching'").run(req.user.id, ride.id);
+    if (!updated.changes) return false;
+    db.prepare("UPDATE ride_offers SET status=CASE WHEN id=? THEN 'accepted' ELSE 'expired' END,responded_at=datetime('now') WHERE ride_id=? AND status='offered'").run(offer.id, ride.id);
+    addRideEvent(ride.id, 'assigned', null, null, 'Driver accepted the ride');
+    return true;
+  })();
+  if (!claimed) return resErr(res, 'Offer is unavailable or already accepted', 409, 'offer_unavailable');
+  db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(req.user.id);
+  notifyUser(ride.customer_id, 'driver_assigned', 'Driver assigned', `A driver is on the way for your ride ${ride.ride_no}`, { ride_id: ride.id });
+  emitRideUpdate(ride.id, { status: 'assigned', driver_id: req.user.id });
+  resOK(res, { message: 'Ride accepted', ride: db.prepare('SELECT * FROM rides WHERE id=?').get(ride.id) });
+}));
+
+app.put('/api/rides/:id/en-route', auth, roleAuth('rider'), (req, res) => {
+  const ride = db.prepare("SELECT * FROM rides WHERE id=? AND driver_id=? AND status='assigned'").get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  updateRideStatus(ride.id, 'driver_en_route', { driver_en_route_at: new Date().toISOString(), lat: req.body.lat, lng: req.body.lng });
+  notifyUser(ride.customer_id, 'driver_en_route', 'Driver on the way', `Your driver is heading to pickup for ${ride.ride_no}`);
+  resOK(res, { message: 'Status updated' });
+});
+
+app.put('/api/rides/:id/arrive-pickup', auth, roleAuth('rider'), (req, res) => {
+  const ride = db.prepare("SELECT * FROM rides WHERE id=? AND driver_id=? AND status='driver_en_route'").get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  updateRideStatus(ride.id, 'arrived_pickup', { arrived_pickup_at: new Date().toISOString(), lat: req.body.lat, lng: req.body.lng });
+  notifyUser(ride.customer_id, 'driver_arrived', 'Your driver has arrived', `Check the plate matches before getting in — ride ${ride.ride_no}`);
+  resOK(res, { message: 'Arrived at pickup' });
+});
+
+// Step 10: "Verify the plate matches, get in. The trip starts."
+app.put('/api/rides/:id/start', auth, roleAuth('rider'), (req, res) => {
+  const ride = db.prepare("SELECT * FROM rides WHERE id=? AND driver_id=? AND status='arrived_pickup'").get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  updateRideStatus(ride.id, 'in_progress', { started_at: new Date().toISOString(), lat: req.body.lat, lng: req.body.lng });
+  notifyUser(ride.customer_id, 'ride_started', 'Trip started', `Your ride ${ride.ride_no} is underway`);
+  resOK(res, { message: 'Trip started' });
+});
+
+app.put('/api/rides/:id/arrive-destination', auth, roleAuth('rider'), (req, res) => {
+  const ride = db.prepare("SELECT * FROM rides WHERE id=? AND driver_id=? AND status='in_progress'").get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  updateRideStatus(ride.id, 'arrived_destination', { arrived_dest_at: new Date().toISOString(), lat: req.body.lat, lng: req.body.lng });
+  resOK(res, { message: 'Arrived at destination' });
+});
+
+// Step 12: payment happens at the end — cash is settled on the spot; card/mpesa are
+// marked paid once the customer confirms through /api/rides/:id/pay.
+app.put('/api/rides/:id/complete', auth, roleAuth('rider'), route((req, res) => {
+  const ride = db.prepare("SELECT * FROM rides WHERE id=? AND driver_id=? AND status='arrived_destination'").get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  const now = new Date().toISOString();
+  const cashSettled = ride.payment_method === 'cash';
+  db.transaction(() => {
+    updateRideStatus(ride.id, 'completed', {
+      completed_at: now,
+      payment_status: cashSettled ? 'paid' : ride.payment_status,
+      paid_at: cashSettled ? now : ride.paid_at
+    });
+    db.prepare("UPDATE riders SET total_rides=COALESCE(total_rides,0)+1, total_earnings=total_earnings+?, online_status='online', availability='online', updated_at=datetime('now') WHERE user_id=?")
+      .run(ride.driver_earnings, req.user.id);
+    const payment = db.prepare('INSERT INTO payments (id,ride_id,user_id,amount,type,method,status,processed_at) VALUES (?,?,?,?,?,?,?,?)');
+    payment.run(uuidv4(), ride.id, req.user.id, ride.driver_earnings, 'rider_payout', ride.payment_method, 'completed', now);
+    if (cashSettled) {
+      payment.run(uuidv4(), ride.id, ride.customer_id, ride.total_fare, 'customer_pay', ride.payment_method, 'completed', now);
+      payment.run(uuidv4(), ride.id, ride.customer_id, ride.platform_fee, 'platform_fee', ride.payment_method, 'completed', now);
+    }
+  })();
+  notifyUser(ride.customer_id, 'ride_completed', 'Trip completed', `You've arrived. Ride ${ride.ride_no} total: ${ride.total_fare} ${ride.currency}.${cashSettled ? '' : ' Complete payment in the app.'}`, { ride_id: ride.id });
+  audit(req.user.id, 'ride_completed', 'ride', ride.id, { fare: ride.total_fare });
+  resOK(res, { message: 'Trip completed', total_fare: ride.total_fare, currency: ride.currency, payment_status: cashSettled ? 'paid' : ride.payment_status });
+}));
+
+app.put('/api/rides/:id/cancel', auth, route((req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  if (['completed', 'cancelled'].includes(ride.status)) return resErr(res, 'Cannot cancel this ride', 409, 'invalid_state');
+  const isCustomer = req.user.id === ride.customer_id;
+  const canCancel = (isCustomer && ['searching', 'assigned', 'driver_en_route'].includes(ride.status)) ||
+    (req.user.id === ride.driver_id && ['assigned', 'driver_en_route'].includes(ride.status)) ||
+    req.user.role === 'admin';
+  if (!canCancel) return resErr(res, 'Cannot cancel at this stage', 409, 'invalid_state');
+  const feeApplies = isCustomer && ['assigned', 'driver_en_route'].includes(ride.status);
+  const cancellationFee = feeApplies ? Number(getConfig('ride_cancel_fee_customer', '0')) || 0 : 0;
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    updateRideStatus(ride.id, 'cancelled', {
+      cancelled_at: now,
+      cancel_reason: validate.optionalString(req.body.reason, 'reason', { max: 240 }) || `Cancelled by ${req.user.role}`,
+      cancelled_by: req.user.role
+    });
+    db.prepare('UPDATE rides SET cancellation_fee=? WHERE id=?').run(cancellationFee, ride.id);
+    db.prepare("UPDATE ride_offers SET status='expired',responded_at=datetime('now') WHERE ride_id=? AND status='offered'").run(ride.id);
+  })();
+  if (ride.driver_id) {
+    db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(ride.driver_id);
+    notifyUser(ride.driver_id, 'ride_cancelled', 'Ride cancelled', `Ride ${ride.ride_no} has been cancelled`);
+  }
+  notifyUser(ride.customer_id, 'ride_cancelled', 'Ride cancelled',
+    cancellationFee > 0 ? `Ride ${ride.ride_no} was cancelled. A ${cancellationFee} ${ride.currency} cancellation fee applies.` : `Your ride ${ride.ride_no} has been cancelled`);
+  audit(req.user.id, 'ride_cancelled', 'ride', ride.id, { by: req.user.role, fee: cancellationFee });
+  resOK(res, { message: 'Ride cancelled', cancellation_fee: cancellationFee });
+}));
+
+app.post('/api/rides/:id/pay', auth, roleAuth('customer'), (req, res) => {
+  if (runtime.providers.payment !== 'sandbox') return resErr(res, 'Payment provider is not configured for live processing', 501, 'payment_provider_not_configured');
+  const ride = db.prepare('SELECT * FROM rides WHERE id=? AND customer_id=?').get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  if (ride.payment_status === 'paid') return resErr(res, 'Already paid', 409, 'already_paid');
+  const method = validate.oneOf(req.body.method, ['card', 'mpesa', 'cash'], 'method', { optional: true }) || ride.payment_method;
+  const ref = (method === 'mpesa' ? 'MPESA' : 'CARD') + Date.now();
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare("UPDATE rides SET payment_status='paid',payment_method=?,payment_ref=?,paid_at=? WHERE id=?").run(method, ref, now, ride.id);
+    const payment = db.prepare('INSERT INTO payments (id,ride_id,user_id,amount,type,method,status,ref,processed_at) VALUES (?,?,?,?,?,?,?,?,?)');
+    payment.run(uuidv4(), ride.id, req.user.id, ride.total_fare, 'customer_pay', method, 'completed', ref, now);
+    payment.run(uuidv4(), ride.id, req.user.id, ride.platform_fee, 'platform_fee', method, 'completed', ref, now);
+  })();
+  resOK(res, { message: 'Payment successful', ref, method });
+});
+
+// Step 11 safety feature: share the live trip with a contact via an unauthenticated link.
+app.post('/api/rides/:id/share', auth, roleAuth('customer'), route((req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=? AND customer_id=?').get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  const contactName = validate.optionalString(req.body.contact_name, 'contact_name', { max: 120 });
+  const contactPhone = req.body.contact_phone ? (normalizePhone(req.body.contact_phone) || req.body.contact_phone) : null;
+  const token = ensureShareToken(ride);
+  if (contactName || contactPhone) db.prepare('UPDATE rides SET share_contact_name=COALESCE(?,share_contact_name),share_contact_phone=COALESCE(?,share_contact_phone) WHERE id=?').run(contactName, contactPhone, ride.id);
+  if (contactPhone) {
+    messaging.sendSms(contactPhone, `${req.user.full_name} is sharing their MOVO trip ${ride.ride_no} with you. Track it: /track/${token}`, { purpose: 'trip_share' })
+      .catch(error => logger.warn('trip_share_sms_failed', { rideId: ride.id, message: error.message }));
+  }
+  resOK(res, { share_token: token, share_path: `/track/${token}`, message: 'Trip sharing enabled' });
+}));
+
+// Public, unauthenticated: what a trusted contact sees when a rider shares their trip.
+app.get('/api/track/share/:token', route((req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE share_token=?').get(req.params.token);
+  if (!ride) return resErr(res, 'Trip not found', 404, 'ride_not_found');
+  const customer = db.prepare('SELECT full_name FROM users WHERE id=?').get(ride.customer_id);
+  let driverLoc = ride.driver_id ? db.prepare('SELECT lat,lng,created_at FROM rider_locations WHERE rider_id=? AND ride_id=? ORDER BY created_at DESC LIMIT 1').get(ride.driver_id, ride.id) : null;
+  if (!driverLoc && ride.driver_id && !['completed', 'cancelled'].includes(ride.status)) {
+    driverLoc = db.prepare('SELECT current_lat AS lat,current_lng AS lng,last_location_update AS created_at FROM riders WHERE user_id=?').get(ride.driver_id) || null;
+  }
+  const driver = rideDriverSummary(ride.driver_id);
+  resOK(res, {
+    rider_name: customer?.full_name || 'MOVO rider',
+    status: ride.status,
+    pickup_address: ride.pickup_address, dest_address: ride.dest_address,
+    driver: driver ? { name: driver.full_name, avg_rating: driver.avg_rating, vehicle_type: driver.vehicle_type, car_make: driver.car_make, car_model: driver.car_model, car_color: driver.car_color, plate: driver.car_plate || driver.motorcycle_plate } : null,
+    driverLocation: driverLoc,
+    serverTime: new Date().toISOString()
+  });
+}));
+
+const SOS_KINDS = ['sos', 'accident', 'unsafe_driver', 'harassment', 'route_deviation', 'other'];
+
+// Step 11 safety feature: emergency/SOS button available to the passenger during a ride.
+app.post('/api/rides/:id/sos', auth, roleAuth('customer'), route((req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=? AND customer_id=?').get(req.params.id, req.user.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  const kind = validate.oneOf(req.body.kind, SOS_KINDS, 'kind', { optional: true }) || 'sos';
+  const description = validate.optionalString(req.body.description, 'description', { max: 2000 });
+  const lat = req.body.lat === undefined ? null : validate.latitude(req.body.lat);
+  const lng = req.body.lng === undefined ? null : validate.longitude(req.body.lng);
+  const id = uuidv4();
+  db.prepare('INSERT INTO incidents (id,ride_id,reporter_id,kind,severity,description,lat,lng) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, ride.id, req.user.id, kind, 'critical', description, lat, lng);
+  const ticketId = uuidv4();
+  db.prepare('INSERT INTO tickets (id,ride_id,reporter_id,category,subject,description,priority) VALUES (?,?,?,?,?,?,?)')
+    .run(ticketId, ride.id, req.user.id, 'incident', `Rider SOS during ${ride.ride_no}`, description || `Passenger triggered SOS (${kind})`, 'high');
+  for (const admin of db.prepare("SELECT id FROM users WHERE role='admin' AND status='active'").all()) {
+    notifyUser(admin.id, 'incident', 'SOS from a passenger', `${req.user.full_name} triggered SOS on ride ${ride.ride_no}`, { incident_id: id, ride_id: ride.id });
+  }
+  logger.warn('ride_sos', { incidentId: id, rideId: ride.id, kind });
+  resOK(res, { id, ticket_id: ticketId, status: 'open', message: 'MOVO operations has been alerted' }, 201);
+}));
+
+app.get('/api/rides/:id/receipt', auth, route((req, res) => {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
+  if (!ride || !canAccessRide(req.user, ride)) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  const rideType = db.prepare('SELECT name FROM ride_types WHERE id=?').get(ride.ride_type_id);
+  const payments = db.prepare('SELECT type,amount,method,status,processed_at FROM payments WHERE ride_id=? ORDER BY created_at').all(ride.id);
+  resOK(res, {
+    receipt_no: `RC-${ride.ride_no}`,
+    ride_no: ride.ride_no,
+    issued_at: new Date().toISOString(),
+    status: ride.status,
+    ride_type: rideType?.name,
+    route: { from: ride.pickup_address, to: ride.dest_address, distance_km: ride.distance_km },
+    amounts: { base_fare: ride.base_fare, distance_fare: ride.distance_fare, time_fare: ride.time_fare, cancellation_fee: ride.cancellation_fee || 0, total: (ride.status === 'cancelled' ? (ride.cancellation_fee || 0) : ride.total_fare), currency: ride.currency },
+    payment: { method: ride.payment_method, status: ride.payment_status, reference: ride.payment_ref, paid_at: ride.paid_at },
+    payments
+  });
+}));
+
 // ─── RATING ROUTES ───────────────────────────────────────────
-app.post('/api/ratings', auth, (req, res) => {
+app.post('/api/ratings', auth, roleAuth('customer'), (req, res) => {
   try {
-    const { delivery_id, score, review } = req.body;
-    if (!delivery_id || !score || score < 1 || score > 5) return resErr(res, 'Valid delivery ID and score (1-5) required');
-    const d = db.prepare('SELECT * FROM deliveries WHERE id=? AND customer_id=? AND status=?').get(delivery_id, req.user.id, 'delivered');
-    if (!d) return resErr(res, 'Delivery not found or not deliverable');
-    const existing = db.prepare('SELECT id FROM ratings WHERE delivery_id=? AND rater_id=?').get(delivery_id, req.user.id);
-    if (existing) return resErr(res, 'Already rated');
-    db.prepare('INSERT INTO ratings (id,delivery_id,rater_id,rated_id,score,review) VALUES (?,?,?,?,?,?)')
-      .run(uuidv4(), delivery_id, req.user.id, d.rider_id, score, review||null);
-    // Update rider average
-    const agg = db.prepare('SELECT AVG(score) as avg, COUNT(*) as cnt FROM ratings WHERE rated_id=?').get(d.rider_id);
-    db.prepare('UPDATE riders SET avg_rating=ROUND(?,1),rating_count=? WHERE user_id=?').run(agg.avg, agg.cnt, d.rider_id);
-    db.prepare('UPDATE deliveries SET customer_rating=?,customer_review=?,rated_at=datetime(\'now\') WHERE id=?').run(score, review||null, delivery_id);
+    const { delivery_id, ride_id, score, review } = req.body;
+    if ((!delivery_id && !ride_id) || !score || score < 1 || score > 5) return resErr(res, 'Valid delivery/ride ID and score (1-5) required');
+    if (delivery_id) {
+      const d = db.prepare('SELECT * FROM deliveries WHERE id=? AND customer_id=? AND status=?').get(delivery_id, req.user.id, 'delivered');
+      if (!d) return resErr(res, 'Delivery not found or not deliverable');
+      const existing = db.prepare('SELECT id FROM ratings WHERE delivery_id=? AND rater_id=?').get(delivery_id, req.user.id);
+      if (existing) return resErr(res, 'Already rated');
+      db.prepare('INSERT INTO ratings (id,delivery_id,rater_id,rated_id,score,review) VALUES (?,?,?,?,?,?)')
+        .run(uuidv4(), delivery_id, req.user.id, d.rider_id, score, review||null);
+      const agg = db.prepare('SELECT AVG(score) as avg, COUNT(*) as cnt FROM ratings WHERE rated_id=?').get(d.rider_id);
+      db.prepare('UPDATE riders SET avg_rating=ROUND(?,1),rating_count=? WHERE user_id=?').run(agg.avg, agg.cnt, d.rider_id);
+      db.prepare('UPDATE deliveries SET customer_rating=?,customer_review=?,rated_at=datetime(\'now\') WHERE id=?').run(score, review||null, delivery_id);
+    } else {
+      // Step 13: rate the driver 1-5 stars once the trip has completed.
+      const r = db.prepare("SELECT * FROM rides WHERE id=? AND customer_id=? AND status='completed'").get(ride_id, req.user.id);
+      if (!r) return resErr(res, 'Ride not found or not completed');
+      const existing = db.prepare('SELECT id FROM ratings WHERE ride_id=? AND rater_id=?').get(ride_id, req.user.id);
+      if (existing) return resErr(res, 'Already rated');
+      db.prepare('INSERT INTO ratings (id,ride_id,rater_id,rated_id,score,review) VALUES (?,?,?,?,?,?)')
+        .run(uuidv4(), ride_id, req.user.id, r.driver_id, score, review||null);
+      const agg = db.prepare('SELECT AVG(score) as avg, COUNT(*) as cnt FROM ratings WHERE rated_id=?').get(r.driver_id);
+      db.prepare('UPDATE riders SET avg_rating=ROUND(?,1),rating_count=? WHERE user_id=?').run(agg.avg, agg.cnt, r.driver_id);
+      db.prepare('UPDATE rides SET customer_rating=?,customer_review=?,rated_at=datetime(\'now\') WHERE id=?').run(score, review||null, ride_id);
+    }
     resOK(res, { message: 'Rating submitted' });
   } catch(e) { resErr(res, e.message); }
 });
@@ -1758,7 +2522,11 @@ app.get('/api/admin/dashboard', auth, roleAuth('admin'), (req, res) => {
   const totalBusinesses = db.prepare("SELECT COUNT(*) as c FROM users WHERE role='business'").get().c;
   const monthRevenue = db.prepare("SELECT COALESCE(SUM(platform_fee),0) as t FROM deliveries WHERE status='delivered' AND date(delivered_at)>=date('now','start of month')").get().t;
   const monthDeliveries = db.prepare("SELECT COUNT(*) as c FROM deliveries WHERE status='delivered' AND date(delivered_at)>=date('now','start of month')").get().c;
-  resOK(res, { active, todayDeliveries, todayCompleted, todayRevenue, totalCustomers, totalRiders, onlineRiders, pendingApprovals, openTickets, totalBusinesses, monthRevenue, monthDeliveries });
+  const activeRides = db.prepare("SELECT COUNT(*) as c FROM rides WHERE status NOT IN ('completed','cancelled')").get().c;
+  const todayRides = db.prepare("SELECT COUNT(*) as c FROM rides WHERE date(created_at)=date('now')").get().c;
+  const todayRidesCompleted = db.prepare("SELECT COUNT(*) as c FROM rides WHERE status='completed' AND date(completed_at)=date('now')").get().c;
+  const todayRideRevenue = db.prepare("SELECT COALESCE(SUM(platform_fee),0) as t FROM rides WHERE status='completed' AND date(completed_at)=date('now')").get().t;
+  resOK(res, { active, todayDeliveries, todayCompleted, todayRevenue, totalCustomers, totalRiders, onlineRiders, pendingApprovals, openTickets, totalBusinesses, monthRevenue, monthDeliveries, activeRides, todayRides, todayRidesCompleted, todayRideRevenue });
 });
 
 app.get('/api/admin/users', auth, roleAuth('admin'), route((req, res) => {
@@ -1836,7 +2604,8 @@ app.put('/api/admin/riders/:id/approve', auth, roleAuth('admin'), (req, res) => 
 app.get('/api/admin/deliveries', auth, roleAuth('admin'), route((req, res) => {
   const { status, search } = req.query;
   const { limit, offset } = validate.pagination(req.query, { defaultLimit: 20, maxLimit: 100 });
-  let query = 'SELECT d.*,u1.full_name as customer_name,u2.full_name as rider_name FROM deliveries d LEFT JOIN users u1 ON d.customer_id=u1.id LEFT JOIN users u2 ON d.rider_id=u2.id';
+  let query = `SELECT d.*,u1.full_name as customer_name,u2.full_name as rider_name,p.status as payout_status,p.reference as payout_reference
+    FROM deliveries d LEFT JOIN users u1 ON d.customer_id=u1.id LEFT JOIN users u2 ON d.rider_id=u2.id LEFT JOIN payouts p ON p.delivery_id=d.id`;
   const conditions = []; const params = [];
   if (status) { conditions.push('d.status=?'); params.push(status); }
   if (search) { conditions.push('(d.order_no LIKE ? OR d.pickup_address LIKE ? OR d.dest_address LIKE ?)'); params.push(`%${search}%`,`%${search}%`,`%${search}%`); }
@@ -1880,6 +2649,70 @@ app.put('/api/admin/deliveries/:id/reassign', auth, roleAuth('admin'), route((re
   emitDeliveryUpdate(d.id, { status: 'assigned', rider_id: riderId });
   resOK(res, { message: 'Delivery reassigned', rider_id: riderId });
 }));
+
+// ─── Admin: ride-hailing oversight ───────────────────────────
+const RIDE_STATUSES = new Set(['searching', 'assigned', 'driver_en_route', 'arrived_pickup', 'in_progress', 'arrived_destination', 'completed', 'cancelled']);
+
+app.get('/api/admin/rides', auth, roleAuth('admin'), route((req, res) => {
+  const { status, search } = req.query;
+  const { limit, offset } = validate.pagination(req.query, { defaultLimit: 20, maxLimit: 100 });
+  let query = 'SELECT r.*,u1.full_name as customer_name,u2.full_name as driver_name FROM rides r LEFT JOIN users u1 ON r.customer_id=u1.id LEFT JOIN users u2 ON r.driver_id=u2.id';
+  const conditions = []; const params = [];
+  if (status) { conditions.push('r.status=?'); params.push(status); }
+  if (search) { conditions.push('(r.ride_no LIKE ? OR r.pickup_address LIKE ? OR r.dest_address LIKE ?)'); params.push(`%${search}%`,`%${search}%`,`%${search}%`); }
+  if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+  query += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  resOK(res, db.prepare(query).all(...params));
+}));
+
+app.put('/api/admin/rides/:id', auth, roleAuth('admin'), (req, res) => {
+  const { status, note } = req.body;
+  if (!status) return resErr(res, 'Status required');
+  if (!RIDE_STATUSES.has(status)) return resErr(res, 'Invalid status', 400, 'invalid_status');
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
+  if (!ride) return resErr(res, 'Not found', 404);
+  updateRideStatus(ride.id, status, { note: note || 'Admin update' });
+  audit(req.user.id, 'admin_ride_status_change', 'ride', ride.id, { from: ride.status, to: status });
+  resOK(res, { message: 'Status updated' });
+});
+
+app.put('/api/admin/rides/:id/reassign', auth, roleAuth('admin'), route((req, res) => {
+  const driverId = validate.requiredString(req.body.driver_id, 'driver_id');
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
+  if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
+  if (['completed', 'cancelled'].includes(ride.status)) return resErr(res, 'Ride is already closed', 409, 'invalid_state');
+  const driver = db.prepare("SELECT u.id,u.full_name FROM users u JOIN riders r ON r.user_id=u.id WHERE u.id=? AND r.approval_status='approved' AND u.status='active'").get(driverId);
+  if (!driver) return resErr(res, 'Target driver is not an approved active rider', 409, 'rider_unavailable');
+  const previousDriver = ride.driver_id;
+  db.transaction(() => {
+    db.prepare("UPDATE rides SET driver_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=?").run(driverId, ride.id);
+    db.prepare("UPDATE ride_offers SET status='expired',responded_at=datetime('now') WHERE ride_id=? AND status='offered'").run(ride.id);
+    db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(driverId);
+    if (previousDriver && previousDriver !== driverId) db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(previousDriver);
+    addRideEvent(ride.id, 'assigned', null, null, `Reassigned by operations to ${driver.full_name}`);
+  })();
+  audit(req.user.id, 'ride_reassigned', 'ride', ride.id, { from: previousDriver, to: driverId });
+  notifyUser(driverId, 'ride_assigned', 'Ride assigned to you', `MOVO operations assigned ride ${ride.ride_no} to you.`, { ride_id: ride.id });
+  if (previousDriver && previousDriver !== driverId) notifyUser(previousDriver, 'ride_reassigned', 'Ride reassigned', `Ride ${ride.ride_no} was reassigned by operations.`);
+  notifyUser(ride.customer_id, 'driver_assigned', 'New driver assigned', `A new driver is handling ride ${ride.ride_no}.`, { ride_id: ride.id });
+  emitRideUpdate(ride.id, { status: 'assigned', driver_id: driverId });
+  resOK(res, { message: 'Ride reassigned', driver_id: driverId });
+}));
+
+app.get('/api/admin/ride-types', auth, roleAuth('admin'), (req, res) => {
+  resOK(res, db.prepare('SELECT * FROM ride_types ORDER BY sort_order').all());
+});
+
+app.put('/api/admin/ride-types/:id', auth, roleAuth('admin'), (req, res) => {
+  const fields = ['name', 'description', 'capacity', 'base_fare', 'per_km_rate', 'per_min_rate', 'sort_order', 'is_active'];
+  const sets = []; const vals = [];
+  for (const f of fields) if (req.body[f] !== undefined) { sets.push(`${f}=?`); vals.push(req.body[f]); }
+  if (sets.length === 0) return resErr(res, 'Nothing to update');
+  vals.push(req.params.id);
+  db.prepare(`UPDATE ride_types SET ${sets.join(',')} WHERE id=?`).run(...vals);
+  resOK(res, { message: 'Ride type updated' });
+});
 
 // ─── Admin: incidents, audit trail and KPIs ──────────────────
 app.get('/api/admin/incidents', auth, roleAuth('admin'), route((req, res) => {
@@ -2001,28 +2834,60 @@ app.get('/api/admin/zones', auth, roleAuth('admin'), (req, res) => {
   resOK(res, db.prepare('SELECT * FROM delivery_zones ORDER BY sort_order').all());
 });
 
-app.post('/api/admin/zones', auth, roleAuth('admin'), (req, res) => {
-  try {
-    const { name, center_lat, center_lng, radius_km, base_price_parcel, base_price_document, per_km_rate, sort_order } = req.body;
-    if (!name || !center_lat || !center_lng) return resErr(res, 'Name and coordinates required');
-    const id = uuidv4();
-    db.prepare('INSERT INTO delivery_zones (id,name,center_lat,center_lng,radius_km,base_price_parcel,base_price_document,per_km_rate,sort_order) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(id, name, center_lat, center_lng, radius_km||3, base_price_parcel||1500, base_price_document||1000, per_km_rate||200, sort_order||0);
-    resOK(res, { id, message: 'Zone created' }, 201);
-  } catch(e) { resErr(res, e.message); }
-});
+app.post('/api/admin/zones', auth, roleAuth('admin'), route((req, res) => {
+  const { name, center_lat, center_lng, radius_km, base_price_parcel, base_price_document, per_km_rate, sort_order, boundary_geojson } = req.body;
+  if (!name || !center_lat || !center_lng) return resErr(res, 'Name and coordinates required');
+  const boundary = boundary_geojson !== undefined && boundary_geojson !== null
+    ? JSON.stringify(validate.geoPolygon(boundary_geojson, 'boundary_geojson')) : null;
+  const id = uuidv4();
+  db.prepare(`INSERT INTO delivery_zones
+    (id,name,center_lat,center_lng,radius_km,base_price_parcel,base_price_document,per_km_rate,sort_order,boundary_geojson,geometry_updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`)
+    .run(id, name, center_lat, center_lng, radius_km||3, base_price_parcel||1500, base_price_document||1000, per_km_rate||200, sort_order||0, boundary);
+  audit(req.user.id, 'zone_created', 'zone', id, { name, boundary: Boolean(boundary) });
+  resOK(res, { id, message: 'Zone created' }, 201);
+}));
 
-app.put('/api/admin/zones/:id', auth, roleAuth('admin'), (req, res) => {
+// A zone's geometry (its center/radius or drawn boundary) drives every price quote
+// and dispatch decision already made against it, so changing it is never silent:
+// any zone that has already carried at least one delivery gets its version bumped
+// and the change audit-logged (spec §50 — "do not allow silent modification of an
+// already-used zone version"). Commercial fields (name, prices, active flag) are
+// plain edits since they don't retroactively change past deliveries' recorded price.
+app.put('/api/admin/zones/:id', auth, roleAuth('admin'), route((req, res) => {
+  const existing = db.prepare('SELECT * FROM delivery_zones WHERE id=?').get(req.params.id);
+  if (!existing) return resErr(res, 'Zone not found', 404, 'zone_not_found');
+
   const fields = ['name','center_lat','center_lng','radius_km','base_price_parcel','base_price_document','per_km_rate','is_active','sort_order'];
   const sets = []; const vals = [];
   for (const f of fields) {
     if (req.body[f] !== undefined) { sets.push(`${f}=?`); vals.push(req.body[f]); }
   }
+  let boundary;
+  if (req.body.boundary_geojson !== undefined) {
+    boundary = req.body.boundary_geojson === null ? null : JSON.stringify(validate.geoPolygon(req.body.boundary_geojson, 'boundary_geojson'));
+    sets.push('boundary_geojson=?'); vals.push(boundary);
+  }
   if (sets.length === 0) return resErr(res, 'Nothing to update');
+
+  const geometryFields = ['center_lat', 'center_lng', 'radius_km', 'boundary_geojson'];
+  const geometryChanged = geometryFields.some(f => req.body[f] !== undefined &&
+    String(f === 'boundary_geojson' ? boundary : req.body[f]) !== String(existing[f]));
+  if (geometryChanged) {
+    const usedCount = db.prepare('SELECT COUNT(*) as c FROM deliveries WHERE origin_zone=? OR dest_zone=?').get(existing.name, existing.name).c;
+    sets.push('version=?', 'geometry_updated_at=?');
+    vals.push(existing.version + 1, new Date().toISOString());
+    audit(req.user.id, 'zone_geometry_changed', 'zone', existing.id, {
+      name: existing.name, from_version: existing.version, to_version: existing.version + 1,
+      deliveries_already_using_zone: usedCount,
+      before: { center_lat: existing.center_lat, center_lng: existing.center_lng, radius_km: existing.radius_km, boundary_geojson: existing.boundary_geojson },
+      after: { center_lat: req.body.center_lat, center_lng: req.body.center_lng, radius_km: req.body.radius_km, boundary_geojson: boundary }
+    });
+  }
   vals.push(req.params.id);
   db.prepare(`UPDATE delivery_zones SET ${sets.join(',')} WHERE id=?`).run(...vals);
-  resOK(res, { message: 'Zone updated' });
-});
+  resOK(res, { message: 'Zone updated', version: geometryChanged ? existing.version + 1 : existing.version });
+}));
 
 app.get('/api/admin/pricing', auth, roleAuth('admin'), (req, res) => {
   const matrix = db.prepare(`SELECT zp.*, oz.name as origin_name, dz.name as dest_name FROM zone_pricing zp
@@ -2058,18 +2923,53 @@ app.get('/api/admin/finances', auth, roleAuth('admin'), (req, res) => {
     GROUP BY date(delivered_at) ORDER BY day DESC`).all();
   const summary = db.prepare(`SELECT COUNT(*) as total, SUM(total_charge) as gross, SUM(platform_fee) as revenue,
     SUM(rider_earnings) as payouts FROM deliveries WHERE status='delivered' AND delivered_at >= datetime('now','-30 days')`).get();
-  const pendingPayouts = db.prepare("SELECT COALESCE(SUM(rider_earnings),0) as t FROM deliveries WHERE status='delivered' AND rider_earnings > 0").get().t;
-  resOK(res, { daily, summary, pendingPayouts });
+  // "Pending" here means still owed and not yet settled — anything short of a
+  // COMPLETED payout, including ones the provider has failed and operations
+  // still needs to retry (spec §7A.9 reconciliation).
+  const pendingPayouts = db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM payouts WHERE status NOT IN ('COMPLETED','REVERSED')").get().t;
+  const payoutsByStatus = db.prepare('SELECT status, COUNT(*) as count, COALESCE(SUM(amount),0) as amount FROM payouts GROUP BY status').all();
+  resOK(res, { daily, summary, pendingPayouts, payoutsByStatus });
 });
 
+// Reconciliation surface for operations: customer payments, delivery financial
+// snapshots, and rider payout obligations/transactions all in one place (spec §7A.9).
+app.get('/api/admin/payouts', auth, roleAuth('admin'), route((req, res) => {
+  const { status } = req.query;
+  const { limit, offset } = validate.pagination(req.query, { defaultLimit: 25, maxLimit: 100 });
+  let query = `SELECT p.*, d.order_no, d.customer_price, d.total_charge, d.payment_status, u.full_name as rider_name
+    FROM payouts p JOIN deliveries d ON d.id=p.delivery_id JOIN users u ON u.id=p.rider_id`;
+  const conditions = []; const params = [];
+  if (status) { conditions.push('p.status=?'); params.push(String(status).toUpperCase()); }
+  if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+  query += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  resOK(res, db.prepare(query).all(...params));
+}));
+
+// Re-attempts a payout that the provider previously failed. Reuses the same
+// payout row/reference — never creates a second obligation for the delivery.
+app.put('/api/admin/payouts/:id/retry', auth, roleAuth('admin'), route(async (req, res) => {
+  const payout = db.prepare('SELECT * FROM payouts WHERE id=?').get(req.params.id);
+  if (!payout) return resErr(res, 'Payout not found', 404, 'payout_not_found');
+  if (!['FAILED', 'PENDING'].includes(payout.status)) return resErr(res, 'Only a failed or pending payout can be retried', 409, 'invalid_state');
+  const delivery = db.prepare('SELECT * FROM deliveries WHERE id=?').get(payout.delivery_id);
+  const result = await settlePayout(delivery);
+  audit(req.user.id, 'payout_retried', 'payout', payout.id, { from_status: payout.status, to_status: result.status });
+  resOK(res, { message: 'Payout retry attempted', payout: result });
+}));
+
 app.get('/api/admin/live-map', auth, roleAuth('admin'), (req, res) => {
-  const riders = db.prepare("SELECT u.id,u.full_name,r.motorcycle_plate,r.avg_rating,r.current_lat as lat,r.current_lng as lng,r.online_status,r.last_location_update FROM users u JOIN riders r ON u.id=r.user_id WHERE r.online_status IN ('online','busy')").all();
+  const riders = db.prepare("SELECT u.id,u.full_name,r.motorcycle_plate,r.car_plate,r.vehicle_type,r.avg_rating,r.current_lat as lat,r.current_lng as lng,r.online_status,r.last_location_update FROM users u JOIN riders r ON u.id=r.user_id WHERE r.online_status IN ('online','busy')").all();
   const activeDeliveries = db.prepare(`SELECT d.*,u.full_name as rider_name,r.current_lat as rider_lat,r.current_lng as rider_lng,r.last_location_update
     FROM deliveries d JOIN users u ON d.rider_id=u.id JOIN riders r ON d.rider_id=r.user_id
     WHERE d.status NOT IN ('delivered','cancelled','failed','created','searching')`).all();
+  const activeRides = db.prepare(`SELECT r.*,u.full_name as driver_name,ri.current_lat as driver_lat,ri.current_lng as driver_lng,ri.last_location_update
+    FROM rides r JOIN users u ON r.driver_id=u.id JOIN riders ri ON r.driver_id=ri.user_id
+    WHERE r.status NOT IN ('completed','cancelled','searching')`).all();
   resOK(res, {
     riders: riders.map(rider => ({ ...rider, is_demo: rider.id.startsWith('demo-map-') })),
-    activeDeliveries: activeDeliveries.map(delivery => ({ ...delivery, is_demo: delivery.id.startsWith('demo-map-') }))
+    activeDeliveries: activeDeliveries.map(delivery => ({ ...delivery, is_demo: delivery.id.startsWith('demo-map-') })),
+    activeRides
   });
 });
 
@@ -2193,6 +3093,62 @@ function dispatchDelivery(deliveryId) {
   search();
 }
 
+// ─── Ride dispatch (automatic — "the app searches for the nearest available driver") ───
+function expireRideOffers() {
+  db.prepare("UPDATE ride_offers SET status='expired',responded_at=COALESCE(responded_at,datetime('now')) WHERE status='offered' AND expires_at<=datetime('now')").run();
+}
+
+function dispatchRide(rideId) {
+  const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(rideId);
+  if (!ride) return;
+
+  let radius = parseFloat(getConfig('ride_driver_search_radius_km', '6'));
+  const expandStep = parseFloat(getConfig('ride_driver_search_expand_km', '2'));
+  const maxRadius = radius + expandStep * 3;
+
+  function search() {
+    const current = db.prepare('SELECT status FROM rides WHERE id=?').get(rideId);
+    if (!current || current.status !== 'searching') return;
+    const nearby = eligibleNearbyDrivers(Number(ride.pickup_lat), Number(ride.pickup_lng), radius)
+      .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
+
+    if (nearby.length > 0) {
+      const timeoutSeconds = parseInt(getConfig('ride_driver_accept_timeout_sec', '25'), 10) || 25;
+      for (const driver of nearby.slice(0, 5)) {
+        const existingOffer = db.prepare("SELECT id FROM ride_offers WHERE ride_id=? AND driver_id=? AND status='offered' AND expires_at>datetime('now')").get(ride.id, driver.id);
+        const offerId = existingOffer?.id || uuidv4();
+        if (!existingOffer) db.prepare("INSERT INTO ride_offers (id,ride_id,driver_id,expires_at) VALUES (?,?,?,datetime('now',?))")
+          .run(offerId, ride.id, driver.id, `+${timeoutSeconds} seconds`);
+        emitToUser(driver.id, 'new_ride', {
+          offer_id: offerId, id: ride.id, ride_no: ride.ride_no,
+          pickup_address: ride.pickup_address, pickup_lat: ride.pickup_lat, pickup_lng: ride.pickup_lng,
+          dest_address: ride.dest_address, dest_lat: ride.dest_lat, dest_lng: ride.dest_lng,
+          earnings: ride.driver_earnings, distance_km: driver.distance_km, estimated_minutes: ride.estimated_minutes,
+          timeout: timeoutSeconds
+        });
+      }
+      setTimeout(() => {
+        expireRideOffers();
+        const stillSearching = db.prepare('SELECT status FROM rides WHERE id=?').get(rideId);
+        if (stillSearching && stillSearching.status === 'searching') {
+          if (radius < maxRadius) { radius += expandStep; search(); }
+          else {
+            updateRideStatus(rideId, 'cancelled', { cancelled_at: new Date().toISOString(), cancel_reason: 'No driver found', cancelled_by: 'system' });
+            notifyUser(ride.customer_id, 'no_driver', 'No Driver Available', `We could not find a driver for ${ride.ride_no}. Please try again.`, { ride_id: ride.id });
+          }
+        }
+      }, timeoutSeconds * 1000 + 50);
+    } else if (radius < maxRadius) {
+      radius += expandStep;
+      setTimeout(search, 3000);
+    } else {
+      updateRideStatus(rideId, 'cancelled', { cancelled_at: new Date().toISOString(), cancel_reason: 'No driver found nearby', cancelled_by: 'system' });
+      notifyUser(ride.customer_id, 'no_driver', 'No Driver Available', `We could not find a driver for ${ride.ride_no}.`, { ride_id: ride.id });
+    }
+  }
+  search();
+}
+
 /**
  * Releases scheduled deliveries into dispatch once their window opens. Runs on a
  * timer rather than a per-delivery timeout so a restart never loses a booking.
@@ -2257,6 +3213,29 @@ io.on('connection', (socket) => {
     io.to(`delivery:${deliveryId}`).emit('rider_location', { delivery_id: deliveryId, lat, lng });
   });
 
+  socket.on('subscribe_ride', (data) => {
+    if (!currentUser) return socket.emit('authentication_error', { error: 'Authentication required' });
+    const rideId = typeof data === 'string' ? data : data?.ride_id;
+    const ride = rideId ? db.prepare('SELECT * FROM rides WHERE id=?').get(rideId) : null;
+    if (!canAccessRide(currentUser, ride)) return socket.emit('authentication_error', { error: 'Ride unavailable' });
+    socket.join(`ride:${ride.id}`);
+    socket.emit('ride_subscribed', { ride_id: ride.id });
+  });
+
+  socket.on('driver_location', (data) => {
+    if (!currentUser || currentUser.role !== 'rider') return;
+    const lat = Number(data?.lat);
+    const lng = Number(data?.lng);
+    const rideId = data?.ride_id;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || !rideId) return;
+    const driver = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(currentUser.id);
+    const ride = db.prepare("SELECT id FROM rides WHERE id=? AND driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination')").get(rideId, currentUser.id);
+    if (!driver || driver.approval_status !== 'approved' || !['online','busy'].includes(driver.online_status) || !ride) return;
+    db.prepare("UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime('now') WHERE user_id=?").run(lat, lng, currentUser.id);
+    db.prepare('INSERT INTO rider_locations (id,rider_id,ride_id,lat,lng) VALUES (?,?,?,?,?)').run(uuidv4(), currentUser.id, rideId, lat, lng);
+    io.to(`ride:${rideId}`).emit('driver_location', { ride_id: rideId, lat, lng });
+  });
+
   socket.on('disconnect', () => {
     if (currentUser && userSockets[currentUser.id]) {
       userSockets[currentUser.id].delete(socket);
@@ -2303,6 +3282,10 @@ metrics.registerGauge('movo_offers_pending', 'Delivery offers awaiting a rider r
   db.prepare("SELECT COUNT(*) AS c FROM delivery_offers WHERE status='offered' AND expires_at>datetime('now')").get().c);
 metrics.registerGauge('movo_tickets_open', 'Open customer support tickets.', () =>
   db.prepare("SELECT COUNT(*) AS c FROM tickets WHERE status='open'").get().c);
+metrics.registerGauge('movo_rides_active', 'Rides currently in progress.', () =>
+  db.prepare("SELECT COUNT(*) AS c FROM rides WHERE status NOT IN ('completed','cancelled')").get().c);
+metrics.registerGauge('movo_ride_offers_pending', 'Ride offers awaiting a driver response.', () =>
+  db.prepare("SELECT COUNT(*) AS c FROM ride_offers WHERE status='offered' AND expires_at>datetime('now')").get().c);
 
 app.get('/metrics', (req, res) => {
   if (runtime.metricsToken) {
@@ -2379,11 +3362,11 @@ server.listen(PORT, () => {
   logger.info('server_started', { port: PORT, environment: runtime.nodeEnv, smsProvider: runtime.providers.sms, rateLimiting: runtime.rateLimit.enabled });
   console.log(`
   ╔══════════════════════════════════════════════════╗
-  ║  MOVO Platform — Deliver with Confidence         ║
+  ║  MOVO Platform — Ride-hailing & Delivery         ║
   ║  Server running on http://localhost:${PORT}       ║
   ║                                                  ║
-  ║  Customer App:  http://localhost:${PORT}/customer ║
-  ║  Rider App:     http://localhost:${PORT}/rider    ║
+  ║  Rider App:     http://localhost:${PORT}/customer ║
+  ║  Driver App:    http://localhost:${PORT}/rider    ║
   ║  Business:      http://localhost:${PORT}/business ║
   ║  Admin:         http://localhost:${PORT}/admin    ║
   ╚══════════════════════════════════════════════════╝

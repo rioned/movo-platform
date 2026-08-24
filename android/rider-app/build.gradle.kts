@@ -15,12 +15,21 @@ android {
         debug { buildConfigField("String", "API_BASE_URL", "\"$debugApiBaseUrl\"") }
         release {
             // A release build with no (or non-https) API base URL would silently ship with
-            // cleartext or an empty endpoint — fail the build instead.
+            // cleartext or an empty endpoint. The check itself is deferred below — buildTypes
+            // blocks configure eagerly for every variant on every invocation, so an eager
+            // error() here would fail `installDebug` too and break the LAN-debug workflow
+            // documented above.
             val releaseApiBaseUrl = project.findProperty("movoApiBaseUrl") as String?
-            if (releaseApiBaseUrl.isNullOrBlank() || !releaseApiBaseUrl.startsWith("https://")) {
-                error("movoApiBaseUrl must be set to an https:// URL for release builds, e.g. -PmovoApiBaseUrl=https://movo-vervice.tech (got: ${releaseApiBaseUrl ?: "<unset>"})")
-            }
-            buildConfigField("String", "API_BASE_URL", "\"$releaseApiBaseUrl\"")
+            buildConfigField("String", "API_BASE_URL", "\"${releaseApiBaseUrl.orEmpty()}\"")
+        }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.path.startsWith(":${project.name}:") && it.name.contains("Release") }) {
+        val releaseApiBaseUrl = project.findProperty("movoApiBaseUrl") as String?
+        if (releaseApiBaseUrl.isNullOrBlank() || !releaseApiBaseUrl.startsWith("https://")) {
+            throw GradleException("movoApiBaseUrl must be set to an https:// URL for release builds, e.g. -PmovoApiBaseUrl=https://movo-vervice.tech (got: ${releaseApiBaseUrl ?: "<unset>"})")
         }
     }
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only override. Once any network-security-config.xml is present, the platform's
+  default base-config (cleartext blocked for target SDK 28+) applies to every host not
+  covered by a domain-config below — silently overriding android:usesCleartextTraffic in
+  the debug manifest. That broke the documented LAN-debug workflow
+  (-PmovoApiBaseUrl=http://10.0.2.2:3000) for any host besides movo-vervice.tech. This
+  debug-variant copy adds an explicit base-config so cleartext works again for a local or
+  LAN dev server, while still refusing it to the production host even in debug builds.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">movo-vervice.tech</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

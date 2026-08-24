@@ -62,7 +62,7 @@ fun MovoField(
     )
 }
 
-/** Rwanda mobile entry: numeric keypad, +250 prefix hint, digits only. */
+/** Phone entry: numeric keypad, digits only. Accepts Rwanda (+250) or Mozambique (+258) mobiles. */
 @Composable
 fun PhoneField(
     value: String,
@@ -70,7 +70,7 @@ fun PhoneField(
     modifier: Modifier = Modifier,
     label: String = "Phone number",
     enabled: Boolean = true,
-    supporting: String? = "Rwanda mobile, e.g. 078 123 4567",
+    supporting: String? = "e.g. 084 123 4567 (Mozambique) or 078 123 4567 (Rwanda)",
     isError: Boolean = false
 ) {
     MovoField(

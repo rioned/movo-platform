@@ -1,12 +1,17 @@
 package com.movo.rider.home
 
 import com.movo.rider.model.ActiveDelivery
+import com.movo.rider.model.ActiveRide
 import com.movo.rider.model.DeliveryOffer
+import com.movo.rider.model.RideOffer
 import com.movo.rider.model.RiderHomeState
 import com.movo.rider.model.RiderProfile
 import com.movo.rider.model.nextRiderAction
+import com.movo.rider.model.nextRideAction
 import com.movo.rider.model.toActiveDelivery
+import com.movo.rider.model.toActiveRide
 import com.movo.rider.model.toDeliveryOffer
+import com.movo.rider.model.toRideOffer
 import com.movo.rider.model.toRiderProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,6 +76,39 @@ class RiderController(private val gateway: RiderGateway) {
             .onFailure { post(RiderMessage.error(it.message ?: "Could not decline this offer")) }
     }
 
+    suspend fun acceptRideOffer(offer: RideOffer) {
+        runCatching { gateway.put("/api/rides/${offer.rideId}/accept") }
+            .onSuccess { post(RiderMessage.success("Ride ${offer.rideNo} accepted")); refresh() }
+            .onFailure { post(RiderMessage.error(it.message ?: "That ride is no longer available")) }
+    }
+
+    suspend fun declineRideOffer(offer: RideOffer) {
+        runCatching { gateway.put("/api/mobile/v1/rider/ride-offers/${offer.offerId}/decline") }
+            .onSuccess { post(RiderMessage.info("Ride offer declined")); refresh() }
+            .onFailure { post(RiderMessage.error(it.message ?: "Could not decline this ride")) }
+    }
+
+    /** Advances the active ride one step — no verification code, the passenger checks the plate. */
+    suspend fun advanceRide(ride: ActiveRide): Boolean {
+        val action = nextRideAction(ride.status) ?: return false
+        var accepted = false
+        runCatching { gateway.put("/api/rides/${ride.id}/${action.path}") }
+            .onSuccess { response ->
+                accepted = true
+                if (response.optBoolean("queued")) post(RiderMessage.info("Saved offline — MOVO will sync this update automatically"))
+                else post(RiderMessage.success(if (action.path == "complete") "Trip completed" else "Status updated"))
+                refresh()
+            }
+            .onFailure { post(RiderMessage.error(it.message ?: "Could not update this ride")) }
+        return accepted
+    }
+
+    suspend fun cancelRide(ride: ActiveRide) {
+        runCatching { gateway.put("/api/rides/${ride.id}/cancel", JSONObject().put("reason", "Cancelled by driver")) }
+            .onSuccess { post(RiderMessage.info("Ride cancelled")); refresh() }
+            .onFailure { post(RiderMessage.error(it.message ?: "Could not cancel this ride")) }
+    }
+
     /**
      * Advances the active delivery one step. Verification codes are required at
      * the two handover points, and the caller is told before the request is sent.
@@ -120,6 +158,17 @@ class RiderController(private val gateway: RiderGateway) {
             .onFailure { post(RiderMessage.error(it.message ?: "Could not save your motorcycle details")) }
     }
 
+    suspend fun saveCar(profile: RiderProfile) {
+        val body = JSONObject()
+        if (profile.carPlate.isNotBlank()) body.put("car_plate", profile.carPlate)
+        if (profile.carMake.isNotBlank()) body.put("car_make", profile.carMake)
+        if (profile.carModel.isNotBlank()) body.put("car_model", profile.carModel)
+        if (profile.carColor.isNotBlank()) body.put("car_color", profile.carColor)
+        runCatching { gateway.put("/api/rider/profile", body) }
+            .onSuccess { post(RiderMessage.success("Car details saved")); refresh() }
+            .onFailure { post(RiderMessage.error(it.message ?: "Could not save your car details")) }
+    }
+
     fun consumeMessage() { mutableMessage.value = null }
 
     private fun post(message: RiderMessage) { mutableMessage.value = message }
@@ -138,10 +187,15 @@ internal fun JSONObject.toHomeState(pendingSync: Int): RiderHomeState {
     val offers = optJSONArray("offers")
     val offer = if ((offers?.length() ?: 0) > 0) offers!!.getJSONObject(0).toDeliveryOffer() else null
     val active = optJSONObject("activeDelivery")?.takeIf { it.has("id") }?.toActiveDelivery()
+    val rideOffers = optJSONArray("rideOffers")
+    val rideOffer = if ((rideOffers?.length() ?: 0) > 0) rideOffers!!.getJSONObject(0).toRideOffer() else null
+    val activeRide = optJSONObject("activeRide")?.takeIf { it.has("id") }?.toActiveRide()
     return RiderHomeState(
         profile = toRiderProfile(),
         offer = offer,
         activeDelivery = active,
+        rideOffer = rideOffer,
+        activeRide = activeRide,
         serverTime = optString("serverTime").takeIf(String::isNotBlank),
         pendingSync = pendingSync
     )

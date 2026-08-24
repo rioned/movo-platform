@@ -1,7 +1,7 @@
 {
   "name": "movo-platform",
   "version": "1.0.0",
-  "description": "MOVO - Deliver with Confidence | Rwanda's Digital Logistics Platform",
+  "description": "MOVO - Ride-hailing for Maputo, Mozambique, plus Rwanda parcel & document delivery",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

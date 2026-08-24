@@ -50,12 +50,14 @@ fun DiscoverySheet(
         DiscoveryPhase.Scanning -> "Finding riders near you"
         DiscoveryPhase.Available -> if (snapshot.riders.size == 1) "1 rider nearby" else "${snapshot.riders.size} riders nearby"
         DiscoveryPhase.NoRiders -> "No riders near this pickup"
+        DiscoveryPhase.OutOfServiceArea -> "MOVO is not currently available at this location."
         DiscoveryPhase.Offline -> "Rider availability needs a connection"
         is DiscoveryPhase.Error -> phase.message.trim().take(MAX_DISCOVERY_ERROR_LENGTH).ifBlank { "Unable to scan for riders" }
     }
     val subtitle = when (phase) {
         DiscoveryPhase.Available -> "Live availability from the current MOVO scan."
         DiscoveryPhase.NoRiders -> "Try this pickup again or choose another pickup point."
+        DiscoveryPhase.OutOfServiceArea -> "Choose a pickup point inside MOVO's service area to continue."
         DiscoveryPhase.Offline -> "Reconnect, then scan this pickup again."
         is DiscoveryPhase.Error -> "Your pickup is saved. You can retry the availability scan."
         DiscoveryPhase.ManualPickupRequired -> "Tap or long-press the map to place your pickup."
@@ -71,6 +73,7 @@ fun DiscoverySheet(
             Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             when (phase) {
                 DiscoveryPhase.Available -> StatusPill("Live", MovoTone.Positive)
+                DiscoveryPhase.OutOfServiceArea -> StatusPill("Unavailable", MovoTone.Critical)
                 DiscoveryPhase.Offline -> StatusPill("Offline", MovoTone.Warning)
                 is DiscoveryPhase.Error -> StatusPill("Retry", MovoTone.Critical)
                 DiscoveryPhase.Scanning -> if (reducedMotion) {
