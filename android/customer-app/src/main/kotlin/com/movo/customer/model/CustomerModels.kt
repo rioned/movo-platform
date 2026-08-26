@@ -8,11 +8,6 @@ data class Coordinate(val latitude: Double, val longitude: Double) {
 
 data class CustomerProfile(val id: String, val name: String, val phone: String, val email: String? = null, val role: String = "")
 data class Quote(val price: Double, val distanceKm: Double, val etaMinutes: Int)
-data class NearbyRider(
-    val id: String, val name: String, val rating: Double, val distanceKm: Double,
-    val location: Coordinate, val locationUpdatedAt: String?, val vehicleMake: String?,
-    val vehicleModel: String?, val vehiclePlate: String?, val vehicleColor: String?
-) { val vehicle: String get() = listOfNotNull(vehicleColor, vehicleMake, vehicleModel, vehiclePlate).filter(String::isNotBlank).joinToString(" • ").ifBlank { "Motorcycle" } }
 data class RiderSummary(
     val id: String, val name: String, val phone: String?, val rating: Double?,
     val vehicleMake: String?, val vehicleModel: String?, val vehiclePlate: String?, val vehicleColor: String?
@@ -41,7 +36,7 @@ data class SendDraft(
 )
 data class SendJourney(
     val draft: SendDraft, val quote: Quote?, val deliveryId: String?,
-    val creationIdempotencyKey: String, val replacementIdempotencyKey: String
+    val creationIdempotencyKey: String
 )
 
 internal fun JSONObject.string(vararg names: String): String? = names.firstNotNullOfOrNull { name -> opt(name)?.takeIf { it != JSONObject.NULL }?.toString()?.takeIf(String::isNotBlank) }
@@ -53,13 +48,6 @@ fun JSONObject.toRider(): RiderSummary = RiderSummary(
     optString("id").ifBlank { optString("user_id") }, string("name", "full_name") ?: "Rider", string("phone"), double("rating", "avg_rating"),
     vehiclePart("vehicle_make", "motorcycle_make", "make"), vehiclePart("vehicle_model", "motorcycle_model", "model", "vehicle_type"),
     vehiclePart("vehicle_plate", "motorcycle_plate", "plate_number"), vehiclePart("vehicle_color", "motorcycle_color", "color")
-)
-fun JSONObject.toNearbyRider(): NearbyRider = NearbyRider(
-    optString("id").ifBlank { optString("user_id") }, string("name", "full_name") ?: "Rider", double("rating", "avg_rating") ?: 0.0,
-    double("distance_km", "distanceKm") ?: 0.0, Coordinate(double("latitude", "lat", "current_lat") ?: 0.0, double("longitude", "lng", "current_lng") ?: 0.0),
-    string("location_updated_at", "locationUpdatedAt", "last_location_update"), vehiclePart("vehicle_make", "motorcycle_make", "make"),
-    vehiclePart("vehicle_model", "motorcycle_model", "model", "vehicle_type"), vehiclePart("vehicle_plate", "motorcycle_plate", "plate_number"),
-    vehiclePart("vehicle_color", "motorcycle_color", "color")
 )
 fun JSONObject.toDelivery(): Delivery {
     val riderJson = optJSONObject("rider")

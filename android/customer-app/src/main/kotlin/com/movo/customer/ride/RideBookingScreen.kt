@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import com.movo.customer.analytics.CustomerAnalytics
 import com.movo.customer.dataObject
 import com.movo.customer.location.CustomerLocation
 import com.movo.customer.map.CustomerMap
@@ -56,6 +57,7 @@ fun RideBookingScreen(api: CustomerApi, profile: CustomerProfile, online: Boolea
     val context = LocalContext.current
     val activity = context as? Activity
     val location = remember { CustomerLocation(context) }
+    val analytics = remember { CustomerAnalytics(api) }
 
     fun locate() = location.requestCurrent { result ->
         result.onSuccess { pickup = it }.onFailure { error = it.message }
@@ -133,6 +135,7 @@ fun RideBookingScreen(api: CustomerApi, profile: CustomerProfile, online: Boolea
                             }.onSuccess { types ->
                                 rideTypes = types
                                 selectedRideTypeId = types.firstOrNull { it.key == "standard" }?.id ?: types.firstOrNull()?.id
+                                analytics.log(AnalyticsEvent.QUOTE_VIEWED, mapOf("ride_type_count" to types.size.toString()))
                                 stage = RideBookingStage.ChooseType
                             }.onFailure { error = it.message }
                             loading = false
@@ -192,8 +195,11 @@ fun RideBookingScreen(api: CustomerApi, profile: CustomerProfile, online: Boolea
                                     .put("dest_address", destinationAddress).put("dest_lat", d.latitude).put("dest_lng", d.longitude)
                                     .put("ride_type_id", rideTypeId).put("payment_method", paymentMethod)
                             ).dataObject().getJSONObject("ride").getString("id")
-                        }.onSuccess { id -> confirming = false; onRideCreated(id) }
-                            .onFailure { error = it.message; confirming = false }
+                        }.onSuccess { id ->
+                            confirming = false
+                            analytics.log(AnalyticsEvent.RIDE_REQUESTED)
+                            onRideCreated(id)
+                        }.onFailure { error = it.message; confirming = false }
                     }
                 },
                 enabled = !confirming && !loading && selectedRideTypeId != null

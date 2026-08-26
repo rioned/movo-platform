@@ -17,7 +17,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.movo.design.MovoAvatar
 import com.movo.design.MovoButton
 import com.movo.design.MovoSecondaryButton
 import com.movo.design.MovoSheet
@@ -26,7 +25,6 @@ import com.movo.design.MovoTextAction
 import com.movo.design.MovoTone
 import com.movo.design.ShimmerBlock
 import com.movo.design.StatusPill
-import com.movo.design.formatDistance
 
 private const val MAX_DISCOVERY_ERROR_LENGTH = 240
 
@@ -48,7 +46,7 @@ fun DiscoverySheet(
         DiscoveryPhase.Locating -> "Finding your pickup"
         DiscoveryPhase.ManualPickupRequired -> "Set your pickup on the map"
         DiscoveryPhase.Scanning -> "Finding riders near you"
-        DiscoveryPhase.Available -> if (snapshot.riders.size == 1) "1 rider nearby" else "${snapshot.riders.size} riders nearby"
+        DiscoveryPhase.Available -> if (snapshot.riderCount == 1) "1 rider nearby" else "${snapshot.riderCount} riders nearby"
         DiscoveryPhase.NoRiders -> "No riders near this pickup"
         DiscoveryPhase.OutOfServiceArea -> "MOVO is not currently available at this location."
         DiscoveryPhase.Offline -> "Rider availability needs a connection"
@@ -92,7 +90,7 @@ fun DiscoverySheet(
                 Spacer(Modifier.height(MovoSpacing.small))
                 ShimmerBlock(height = 14.dp, modifier = Modifier.fillMaxWidth(0.6f))
             }
-            DiscoveryPhase.Available -> NearbyRiderStrip(snapshot)
+            DiscoveryPhase.Available -> NearbyRiderCount(snapshot.riderCount)
             else -> Unit
         }
 
@@ -110,25 +108,22 @@ fun DiscoverySheet(
     }
 }
 
-/** Compact preview of who is actually available, closest rider first. */
+/**
+ * States only that riders are around, never who or exactly where — dispatch is
+ * blind and zone-based (spec §12), so there is nothing here to browse or pick.
+ */
 @Composable
-private fun NearbyRiderStrip(snapshot: DiscoverySnapshot) {
-    val closest = snapshot.riders.sortedBy { it.distanceKm }.take(4)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
-        closest.forEach { rider -> MovoAvatar(rider.name, size = 36.dp, online = true) }
-        Column(Modifier.padding(start = MovoSpacing.small)) {
-            closest.firstOrNull()?.let { nearest ->
-                Text(
-                    "Closest ${formatDistance(nearest.distanceKm)} away",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            Text(
-                "Verified riders with live location",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+private fun NearbyRiderCount(riderCount: Int) {
+    Column {
+        Text(
+            if (riderCount == 1) "1 verified rider is online near this pickup" else "$riderCount verified riders are online near this pickup",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            "MOVO will match you with the nearest available rider automatically.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

@@ -30,6 +30,7 @@ import com.movo.design.MovoBanner
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTheme
 import com.movo.design.MovoTone
+import com.movo.rider.analytics.RiderAnalytics
 import com.movo.rider.connectivity.RiderConnectivity
 import com.movo.rider.home.RiderController
 import com.movo.rider.home.RiderGateway
@@ -62,7 +63,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectivity: RiderConnectivity
 
     private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) startLocationSharingIfOnline()
+        if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
+            val state = controller.state.value
+            startLocationSharingIfOnline(state.activeDelivery != null || state.activeRide != null)
+        }
     }
 
     private var authenticated by mutableStateOf(false)
@@ -80,13 +84,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         api = RiderApi(this)
         connectivity = RiderConnectivity(this)
-        controller = RiderController(object : RiderGateway {
-            override suspend fun get(path: String) = api.get(path)
-            override suspend fun put(path: String, body: JSONObject) = api.put(path, body)
-            override suspend fun post(path: String, body: JSONObject) = api.post(path, body)
-            override suspend fun syncPending() = api.syncPending()
-            override fun pendingCount() = api.pendingCount()
-        })
+        controller = RiderController(
+            object : RiderGateway {
+                override suspend fun get(path: String) = api.get(path)
+                override suspend fun put(path: String, body: JSONObject) = api.put(path, body)
+                override suspend fun post(path: String, body: JSONObject) = api.post(path, body)
+                override suspend fun syncPending() = api.syncPending()
+                override fun pendingCount() = api.pendingCount()
+            },
+            analytics = RiderAnalytics(api)
+        )
         authenticated = api.isAuthenticated
         if (authenticated) refresh()
         setContent { MovoTheme { RiderApp() } }
@@ -100,8 +107,6 @@ class MainActivity : ComponentActivity() {
     private fun refresh() = lifecycleScope.launch {
         controller.refresh()
         connectRealtime()
-        val profile = controller.state.value.profile
-        if (profile.isOnline) startLocationSharingIfOnline()
     }
 
     private fun connectRealtime() {
@@ -116,10 +121,11 @@ class MainActivity : ComponentActivity() {
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS)
     )
 
-    private fun startLocationSharingIfOnline() {
+    private fun startLocationSharingIfOnline(hasActiveWork: Boolean = false) {
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (!granted) { requestLocationPermission(); return }
-        ContextCompat.startForegroundService(this, Intent(this, RiderLocationService::class.java))
+        val intent = Intent(this, RiderLocationService::class.java).putExtra(RiderLocationService.EXTRA_ACTIVE_WORK, hasActiveWork)
+        ContextCompat.startForegroundService(this, intent)
     }
 
     private fun stopLocationSharing() = stopService(Intent(this, RiderLocationService::class.java))
@@ -238,6 +244,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(online) { if (online) controller.refresh() }
+        // Drives the location service's tier: tight polling only while a delivery/ride
+        // is actually active, loose polling while merely available-and-idle (spec §13.6).
+        val hasActiveWork = state.activeDelivery != null || state.activeRide != null
+        LaunchedEffect(state.profile.isOnline, hasActiveWork) {
+            if (state.profile.isOnline) startLocationSharingIfOnline(hasActiveWork) else stopLocationSharing()
+        }
         LaunchedEffect(message) {
             message?.let {
                 snackbarHost.showSnackbar(it.text)
@@ -287,23 +299,15 @@ class MainActivity : ComponentActivity() {
                             onOtpChange = { otp = it },
                             onGoOnline = {
                                 busy = true
-                                lifecycleScope.launch {
-                                    controller.setAvailability("online")
-                                    startLocationSharingIfOnline()
-                                    busy = false
-                                }
+                                lifecycleScope.launch { controller.setAvailability("online"); busy = false }
                             },
                             onGoOffline = {
                                 busy = true
-                                lifecycleScope.launch {
-                                    controller.setAvailability("offline")
-                                    stopLocationSharing()
-                                    busy = false
-                                }
+                                lifecycleScope.launch { controller.setAvailability("offline"); busy = false }
                             },
                             onAcceptOffer = { offer ->
                                 busy = true
-                                lifecycleScope.launch { controller.acceptOffer(offer); startLocationSharingIfOnline(); busy = false }
+                                lifecycleScope.launch { controller.acceptOffer(offer); busy = false }
                             },
                             onDeclineOffer = { offer ->
                                 busy = true
@@ -319,7 +323,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onAcceptRideOffer = { offer ->
                                 busy = true
-                                lifecycleScope.launch { controller.acceptRideOffer(offer); startLocationSharingIfOnline(); busy = false }
+                                lifecycleScope.launch { controller.acceptRideOffer(offer); busy = false }
                             },
                             onDeclineRideOffer = { offer ->
                                 busy = true
@@ -378,11 +382,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onAvailabilityChange = { status ->
                                 busy = true
-                                lifecycleScope.launch {
-                                    controller.setAvailability(status)
-                                    if (status == "online") startLocationSharingIfOnline() else stopLocationSharing()
-                                    busy = false
-                                }
+                                lifecycleScope.launch { controller.setAvailability(status); busy = false }
                             },
                             onSignOut = {
                                 stopLocationSharing()

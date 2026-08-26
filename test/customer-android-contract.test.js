@@ -45,7 +45,7 @@ test('Task 4 customer foundation has native map, location, realtime, and network
     /MapEventsOverlay/, /longPressHelper/, /Marker/, /motorcycle/i, /BoundingBox/
   ]);
   source('src/main/kotlin/com/movo/customer/model/CustomerModels.kt', [
-    /data class Coordinate/, /data class CustomerProfile/, /data class NearbyRider/,
+    /data class Coordinate/, /data class CustomerProfile/,
     /data class Delivery/, /data class TrackingSnapshot/, /data class SendDraft/
   ]);
 });
@@ -66,17 +66,18 @@ test('Task 5 auth coordinator restores session and exposes four customer workspa
   ]);
 });
 
-test('Task 6 send flow quotes finite coordinates and selects exactly one rider idempotently', () => {
+test('Task 6 send flow quotes finite coordinates and requests one blind, zone-based dispatch idempotently', () => {
   source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
     /fun MapFirstSendScreen\(/, /requestCurrent/, /RequestPermission/,
     /Pickup/, /Destination/, /Sender/, /Receiver/,
-    /\/api\/deliveries\/price/, /isFinite/, /Quote/, /price|totalCharge/
+    /\/api\/deliveries\/price/, /isFinite/, /Quote/, /price|totalCharge/,
+    /fun ConfirmRequestSheet\(/, /Idempotency|idempotencyKey/, /api\.post\("\/api\/deliveries"/,
+    /submitting/
   ]);
-  source('src/main/kotlin/com/movo/customer/send/RiderSelectionScreen.kt', [
-    /fun RiderSelectionScreen\(/, /preferred_rider_id/,
-    /Idempotency|idempotencyKey/, /\/api\/deliveries/, /select-rider/,
-    /awaiting_rider_selection/, /declined/, /expired/, /submitting/
-  ]);
+  // Dispatch is blind and zone-based (spec §12): the confirm step never lets the
+  // customer pin a specific rider.
+  const sendScreen = read('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt');
+  assert.doesNotMatch(sendScreen, /preferred_rider_id|select-rider|awaiting_rider_selection/);
   source('src/main/kotlin/com/movo/customer/send/RequestDetailsSheet.kt', [/parcel/, /document/]);
   source('src/main/kotlin/com/movo/customer/MainActivity.kt', [/SendScreen/, /onTracking/]);
 });
@@ -103,18 +104,17 @@ test('Task 7 receive, activity, and tracking use HTTP authority after every real
   ]);
 });
 
-test('remediation preserves the existing selected delivery and durable request state', () => {
+test('remediation preserves the already-created delivery and durable request state', () => {
   source('src/main/kotlin/com/movo/customer/session/CustomerSession.kt', [
     /saveJourney/, /restoreJourney/, /clearJourney/, /creationIdempotencyKey/,
-    /replacementIdempotencyKey/, /deliveryId/, /SendDraft/, /Quote/
+    /deliveryId/, /SendDraft/, /Quote/
   ]);
-  source('src/main/kotlin/com/movo/customer/send/RiderSelectionScreen.kt', [
-    /existingDeliveryId/, /selectReplacement\(/, /api\.put\("\/api\/deliveries\/\$existingDeliveryId\/select-rider"/,
-    /submitting/, /riderId/
-  ]);
+  // There is no rider-replacement flow under blind dispatch: a resumed journey
+  // that already produced a delivery id just resumes tracking, never re-requests.
   source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
+    /existingDeliveryId/, /resumeId/, /onTracking\(resumeId\)/,
     /restoreJourney/, /RequestMultiplePermissions/, /shouldShowRequestPermissionRationale/,
-    /pickup_lat/, /service_type/, /api\.post\("\/api\/deliveries"/, /saveJourney/
+    /pickup_lat/, /service_type/, /api\.post\("\/api\/deliveries"/, /saveJourney/, /submitting/
   ]);
 source("src/main/kotlin/com/movo/customer/send/RequestDetailsSheet.kt", [/Delivery instructions/, /Cash/, /Mobile money/]);
 });
@@ -170,15 +170,13 @@ test('remediation keeps customer screens usable on narrow layouts', () => {
   source('src/main/kotlin/com/movo/customer/map/CustomerMap.kt', [/modifier = modifier\.clipToBounds\(\)/]);
 });
 
-test('Refreshes riders after quote and before exclusive rider choice', () => {
+test('the confirm step requests one blind dispatch, never a chosen rider', () => {
   source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
-    /onRefreshRiders|refreshAvailability/, /refreshing/, /preferred_rider_id/,
-    /409|conflict/, /idempotency|replacementIdempotencyKey/
+    /fun ConfirmRequestSheet\(/, /PriceSummary/, /onConfirm/, /submitting/, /idempotencyKey|creationKey/,
+    /nearest available rider/i
   ]);
-  source('src/main/kotlin/com/movo/customer/send/RiderSelectionScreen.kt', [
-    /riders:/, /refreshing:/, /submitting:/, /onRefreshRiders/, /onSelectRider/,
-    /No riders available now/, /PriceSummary/, /RatingStars/
-  ]);
+  const sendScreen = read('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt');
+  assert.doesNotMatch(sendScreen, /preferred_rider_id|RiderSelectionScreen|RatingStars/);
 });
 
 test('map-first discovery sheet exposes honest gated rider availability', () => {
@@ -251,4 +249,23 @@ test('MOVO map-first colors and forced-restore rescan', () => {
   ]);
   const session = read('src/main/kotlin/com/movo/customer/session/CustomerSession.kt');
   assert.doesNotMatch(session, /ride|nearby|RiderSelection|DiscoverySnapshot/);
+});
+
+test('the customer app resolves the pickup address through the shared GeocodingService abstraction (spec §63)', () => {
+  source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
+    /import com\.movo\.design\.maps\.MapServices/, /import com\.movo\.design\.maps\.MapProvider/,
+    /MapServices\.geocoding\(MapProvider\.OSM\)/, /reverseGeocode\(/
+  ]);
+});
+
+test('the customer app fires the named product analytics events (spec §78)', () => {
+  source('src/main/kotlin/com/movo/customer/analytics/CustomerAnalytics.kt', [
+    /class CustomerAnalytics/, /AnalyticsLogger/, /\/api\/analytics\/events/
+  ]);
+  source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
+    /AnalyticsEvent\.QUOTE_VIEWED/, /AnalyticsEvent\.DELIVERY_CONFIRMED/
+  ]);
+  source('src/main/kotlin/com/movo/customer/ride/RideBookingScreen.kt', [
+    /AnalyticsEvent\.QUOTE_VIEWED/, /AnalyticsEvent\.RIDE_REQUESTED/
+  ]);
 });

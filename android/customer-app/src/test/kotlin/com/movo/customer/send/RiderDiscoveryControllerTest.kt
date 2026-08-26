@@ -1,7 +1,6 @@
 package com.movo.customer.send
 
 import com.movo.customer.model.Coordinate
-import com.movo.customer.model.NearbyRider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +19,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+/**
+ * Dispatch is blind and zone-based (spec §12): [NearbyRiderSource] reports how many
+ * eligible riders MOVO can see near a pickup, never who they are, so these tests
+ * exercise the controller's scan/coalesce/race-safety logic against a plain count
+ * rather than a list of identified riders.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RiderDiscoveryControllerTest {
     private val pickupA = Coordinate(-1.9441, 30.0619)
@@ -30,7 +35,7 @@ class RiderDiscoveryControllerTest {
         var calls = 0
         val controller = RiderDiscoveryController {
             calls += 1
-            listOf(rider())
+            2
         }
 
         controller.scan(pickupA, online = true)
@@ -38,7 +43,7 @@ class RiderDiscoveryControllerTest {
         assertEquals(1, calls)
         assertEquals(DiscoveryPhase.Available, controller.snapshot.value.phase)
         assertEquals(pickupA, controller.snapshot.value.pickup)
-        assertEquals(listOf(rider()), controller.snapshot.value.riders)
+        assertEquals(2, controller.snapshot.value.riderCount)
         assertTrue(controller.snapshot.value.canContinue())
     }
 
@@ -47,7 +52,7 @@ class RiderDiscoveryControllerTest {
         var calls = 0
         val controller = RiderDiscoveryController {
             calls += 1
-            listOf(rider())
+            2
         }
 
         controller.scan(Coordinate(Double.NaN, 30.0619), online = true)
@@ -55,17 +60,17 @@ class RiderDiscoveryControllerTest {
         assertEquals(0, calls)
         assertEquals(DiscoveryPhase.ManualPickupRequired, controller.snapshot.value.phase)
         assertEquals(null, controller.snapshot.value.pickup)
-        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertEquals(0, controller.snapshot.value.riderCount)
     }
 
     @Test
     fun empty_results_block_continue() = runTest {
-        val controller = RiderDiscoveryController { emptyList() }
+        val controller = RiderDiscoveryController { 0 }
 
         controller.scan(pickupA, online = true)
 
         assertEquals(DiscoveryPhase.NoRiders, controller.snapshot.value.phase)
-        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertEquals(0, controller.snapshot.value.riderCount)
         assertTrue(!controller.snapshot.value.canContinue())
     }
 
@@ -76,7 +81,7 @@ class RiderDiscoveryControllerTest {
         controller.scan(pickupA, online = true)
 
         assertEquals(DiscoveryPhase.OutOfServiceArea, controller.snapshot.value.phase)
-        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertEquals(0, controller.snapshot.value.riderCount)
         assertTrue(!controller.snapshot.value.canContinue())
     }
 
@@ -85,7 +90,7 @@ class RiderDiscoveryControllerTest {
         var calls = 0
         val controller = RiderDiscoveryController {
             calls += 1
-            listOf(rider())
+            2
         }
         controller.scan(pickupA, online = true)
 
@@ -94,13 +99,13 @@ class RiderDiscoveryControllerTest {
         assertEquals(1, calls)
         assertEquals(DiscoveryPhase.Offline, controller.snapshot.value.phase)
         assertEquals(pickupA, controller.snapshot.value.pickup)
-        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertEquals(0, controller.snapshot.value.riderCount)
     }
 
     @Test
     fun late_response_for_old_pickup_is_discarded() = runTest {
-        val responseA = CompletableDeferred<List<NearbyRider>>()
-        val responseB = CompletableDeferred<List<NearbyRider>>()
+        val responseA = CompletableDeferred<Int>()
+        val responseB = CompletableDeferred<Int>()
         val controller = RiderDiscoveryController { pickup ->
             if (pickup == pickupA) responseA.await() else responseB.await()
         }
@@ -111,23 +116,23 @@ class RiderDiscoveryControllerTest {
         val scanB = launch { controller.scan(pickupB, online = true) }
         runCurrent()
 
-        responseA.complete(listOf(rider(id = "old-rider")))
+        responseA.complete(1)
         runCurrent()
 
         assertEquals(DiscoveryPhase.Scanning, controller.snapshot.value.phase)
         assertEquals(pickupB, controller.snapshot.value.pickup)
-        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertEquals(0, controller.snapshot.value.riderCount)
 
-        responseB.complete(listOf(rider(id = "new-rider")))
+        responseB.complete(4)
         scanA.join()
         scanB.join()
-        assertEquals(listOf("new-rider"), controller.snapshot.value.riders.map { it.id })
+        assertEquals(4, controller.snapshot.value.riderCount)
     }
 
     @Test
     fun duplicate_scan_for_same_inflight_pickup_is_coalesced() = runTest {
         val calls = AtomicInteger()
-        val response = CompletableDeferred<List<NearbyRider>>()
+        val response = CompletableDeferred<Int>()
         val controller = RiderDiscoveryController {
             calls.incrementAndGet()
             response.await()
@@ -146,7 +151,7 @@ class RiderDiscoveryControllerTest {
             assertTrue(waitUntil { calls.get() > 0 })
             assertTrue(waitUntil { scans.count { it.isCompleted } == callerCount - 1 })
             assertEquals(1, calls.get())
-            response.complete(listOf(rider()))
+            response.complete(1)
             scans.forEach { it.join() }
         }
         assertEquals(DiscoveryPhase.Available, controller.snapshot.value.phase)
@@ -156,7 +161,7 @@ class RiderDiscoveryControllerTest {
     fun invalidate_and_new_scan_win_race_after_old_completion_check() = runTest {
         val allowOldFailure = CompletableDeferred<Unit>()
         val oldSourceStarted = CompletableDeferred<Unit>()
-        val newResponse = CompletableDeferred<List<NearbyRider>>()
+        val newResponse = CompletableDeferred<Int>()
         val messageRead = CountDownLatch(1)
         val allowMessage = CountDownLatch(1)
         val controller = RiderDiscoveryController { pickup ->
@@ -191,15 +196,15 @@ class RiderDiscoveryControllerTest {
 
         assertEquals(DiscoveryPhase.Scanning, controller.snapshot.value.phase)
         assertEquals(pickupB, controller.snapshot.value.pickup)
-        newResponse.complete(listOf(rider(id = "new-rider")))
+        newResponse.complete(3)
         newScan.join()
-        assertEquals(listOf("new-rider"), controller.snapshot.value.riders.map { it.id })
+        assertEquals(3, controller.snapshot.value.riderCount)
     }
 
     @Test
     fun late_exception_for_old_pickup_preserves_new_request_ownership() = runTest {
-        val oldResponse = CompletableDeferred<List<NearbyRider>>()
-        val newResponse = CompletableDeferred<List<NearbyRider>>()
+        val oldResponse = CompletableDeferred<Int>()
+        val newResponse = CompletableDeferred<Int>()
         val callsForNewPickup = AtomicInteger()
         val controller = RiderDiscoveryController { pickup ->
             if (pickup == pickupA) oldResponse.await()
@@ -222,14 +227,14 @@ class RiderDiscoveryControllerTest {
         assertEquals(1, callsForNewPickup.get())
         assertEquals(DiscoveryPhase.Scanning, controller.snapshot.value.phase)
         assertEquals(pickupB, controller.snapshot.value.pickup)
-        newResponse.complete(listOf(rider(id = "new-rider")))
+        newResponse.complete(3)
         newScan.join()
     }
 
     @Test
     fun late_cancellation_for_old_pickup_preserves_new_request_ownership() = runTest {
         val oldSourceStarted = CompletableDeferred<Unit>()
-        val newResponse = CompletableDeferred<List<NearbyRider>>()
+        val newResponse = CompletableDeferred<Int>()
         val callsForNewPickup = AtomicInteger()
         val controller = RiderDiscoveryController { pickup ->
             if (pickup == pickupA) {
@@ -254,73 +259,26 @@ class RiderDiscoveryControllerTest {
         assertEquals(1, callsForNewPickup.get())
         assertEquals(DiscoveryPhase.Scanning, controller.snapshot.value.phase)
         assertEquals(pickupB, controller.snapshot.value.pickup)
-        newResponse.complete(listOf(rider(id = "new-rider")))
+        newResponse.complete(3)
         newScan.join()
     }
 
     @Test
-    fun malformed_rider_coordinates_are_removed() = runTest {
-        val controller = RiderDiscoveryController {
-            listOf(
-                rider(id = "valid"),
-                rider(id = "nan", location = Coordinate(Double.NaN, 30.0)),
-                rider(id = "out-of-range", location = Coordinate(91.0, 30.0))
-            )
-        }
+    fun negative_counts_from_a_malformed_response_are_clamped_to_zero() = runTest {
+        val controller = RiderDiscoveryController { -1 }
 
         controller.scan(pickupA, online = true)
 
-        assertEquals(listOf("valid"), controller.snapshot.value.riders.map { it.id })
-        assertEquals(DiscoveryPhase.Available, controller.snapshot.value.phase)
+        assertEquals(DiscoveryPhase.NoRiders, controller.snapshot.value.phase)
+        assertEquals(0, controller.snapshot.value.riderCount)
     }
 
     @Test
-    fun production_parser_rejects_missing_coordinates() {
-        val riders = parseProductionRiders(mapOf("id" to "missing"))
-
-        assertTrue(riders.isEmpty())
-    }
-
-    @Test
-    fun production_parser_rejects_nonnumeric_coordinates() {
-        val riders = parseProductionRiders(riderJson("nonnumeric", latitude = "north", longitude = "east"))
-
-        assertTrue(riders.isEmpty())
-    }
-
-    @Test
-    fun production_parser_rejects_nonfinite_coordinates() {
-        val riders = parseProductionRiders(
-            riderJson("nan", latitude = "NaN", longitude = 30.0),
-            riderJson("infinity", latitude = -1.9, longitude = "Infinity")
-        )
-
-        assertTrue(riders.isEmpty())
-    }
-
-    @Test
-    fun production_parser_rejects_out_of_range_coordinates() {
-        val riders = parseProductionRiders(
-            riderJson("latitude", latitude = 90.1, longitude = 30.0),
-            riderJson("longitude", latitude = -1.9, longitude = -180.1)
-        )
-
-        assertTrue(riders.isEmpty())
-    }
-
-    @Test
-    fun production_parser_accepts_and_maps_valid_objects() {
-        val riders = parseProductionRiders(riderJson("valid", latitude = -1.943, longitude = 30.0625))
-
-        assertEquals(listOf("valid"), riders)
-    }
-
-    @Test
-    fun source_exception_produces_bounded_error_and_no_stale_riders() = runTest {
+    fun source_exception_produces_bounded_error_and_resets_count() = runTest {
         var shouldFail = false
         val controller = RiderDiscoveryController {
             if (shouldFail) throw IllegalStateException("x".repeat(500))
-            listOf(rider())
+            2
         }
         controller.scan(pickupA, online = true)
         shouldFail = true
@@ -330,39 +288,9 @@ class RiderDiscoveryControllerTest {
         val phase = controller.snapshot.value.phase
         assertTrue(phase is DiscoveryPhase.Error)
         assertEquals(240, phase.message.length)
-        assertTrue(controller.snapshot.value.riders.isEmpty())
+        assertEquals(0, controller.snapshot.value.riderCount)
         assertEquals(pickupA, controller.snapshot.value.pickup)
     }
-
-    private fun rider(
-        id: String = "rider-1",
-        location: Coordinate = Coordinate(-1.9430, 30.0625)
-    ) = NearbyRider(
-        id = id,
-        name = "Aline",
-        rating = 4.9,
-        distanceKm = 0.8,
-        location = location,
-        locationUpdatedAt = "2026-07-29T12:00:00Z",
-        vehicleMake = "TVS",
-        vehicleModel = "HLX",
-        vehiclePlate = "RAA 001A",
-        vehicleColor = "Black"
-    )
-
-    private fun riderJson(id: String, latitude: Any, longitude: Any): Map<String, Any?> = mapOf(
-        "id" to id,
-        "name" to "Aline",
-        "latitude" to latitude,
-        "longitude" to longitude
-    )
-
-    private fun parseProductionRiders(vararg riders: Map<String, Any?>): List<String> =
-        mapValidNearbyRiders(
-            riders = riders.asIterable(),
-            valueAt = { rider, name -> rider[name] },
-            mapper = { rider -> rider.getValue("id").toString() }
-        )
 
     private suspend fun waitUntil(predicate: () -> Boolean): Boolean {
         repeat(10_000) {

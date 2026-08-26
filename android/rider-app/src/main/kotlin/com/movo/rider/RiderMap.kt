@@ -11,8 +11,11 @@ import android.location.LocationListener
 import android.location.LocationManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.viewinterop.AndroidView
@@ -20,6 +23,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.movo.design.maps.LatLng
+import com.movo.design.maps.MapServices
+import com.movo.design.maps.MapProvider
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
@@ -94,6 +100,25 @@ fun RiderMap(context: Context, pickupLat: Double?, pickupLng: Double?, destLat: 
   val mapViewState = remember { mutableStateOf<MapView?>(null) }
   val locationListenerState = remember { mutableStateOf<LocationListener?>(null) }
   val lifecycleOwner = LocalLifecycleOwner.current
+  // Route line between pickup and destination, via the map-service abstraction (spec
+  // §63): road-following through OSRM when reachable, degrading to a straight line
+  // on any failure. Defaults to MapProvider.OSM, matching this app's only supported
+  // tile backend today; a future MAP_PROVIDER=sandbox toggle read from the server's
+  // config would flow into this same call, not a new one.
+  val routingService = remember { MapServices.routing(MapProvider.OSM) }
+  var routePoints by remember { mutableStateOf<List<GeoPoint>>(emptyList()) }
+
+  LaunchedEffect(pickupLat, pickupLng, destLat, destLng) {
+    if (pickupLat == null || pickupLng == null || destLat == null || destLng == null) {
+      routePoints = emptyList()
+      return@LaunchedEffect
+    }
+    val pickup = GeoPoint(pickupLat, pickupLng)
+    val destination = GeoPoint(destLat, destLng)
+    routePoints = listOf(pickup, destination) // instant straight line, upgraded below
+    val route = routingService.route(LatLng(pickupLat, pickupLng), LatLng(destLat, destLng))
+    routePoints = route.points.map { GeoPoint(it.latitude, it.longitude) }
+  }
 
   DisposableEffect(lifecycleOwner) {
     val observer = LifecycleEventObserver { _, event ->
@@ -193,9 +218,9 @@ fun RiderMap(context: Context, pickupLat: Double?, pickupLng: Double?, destLat: 
         infoWindow = null
       }.also(map.overlays::add)
     }
-    if (pickupLat != null && pickupLng != null && destLat != null && destLng != null) {
+    if (routePoints.size > 1) {
       Polyline().apply {
-        setPoints(listOf(GeoPoint(pickupLat, pickupLng), GeoPoint(destLat, destLng)))
+        setPoints(routePoints)
         outlinePaint.color = Color.argb(200, 8, 107, 77)
         outlinePaint.strokeWidth = 8f
       }.also(map.overlays::add)
