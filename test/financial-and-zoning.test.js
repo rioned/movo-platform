@@ -282,12 +282,63 @@ test('operations can list and reconcile payouts by status (spec §7A.9)', async 
 
 test('the customer never sees the rider payout on a completed delivery (spec Test 12)', async () => {
   const admin = await adminToken();
-  const { customer, deliveryId } = await completeDelivery(admin);
+  const { customer, rider, deliveryId, otps } = await completeDelivery(admin);
+  const completed = await request(`/api/deliveries/${deliveryId}/complete`, { method: 'PUT', token: rider.token, body: { otp: otps.delivery_otp } });
+  assert.equal(completed.response.status, 200, completed.json.error);
   const view = await request(`/api/deliveries/${deliveryId}`, { token: customer.token });
   assert.equal(view.response.status, 200, view.json.error);
   assert.equal(view.json.data.payout, undefined, 'customer response must not include a payout object');
   assert.equal(view.json.data.delivery.rider_earnings, undefined, 'customer delivery view must not include rider_earnings');
   assert.equal(view.json.data.delivery.platform_fee, undefined, 'customer delivery view must not include platform_fee');
+
+  const pod = await request(`/api/deliveries/${deliveryId}/pod`, { token: customer.token });
+  assert.equal(pod.response.status, 200, pod.json.error);
+  assert.equal(pod.json.data.charges.rider_earnings, undefined, 'POD charges must not include rider_earnings for a customer');
+  assert.equal(pod.json.data.charges.platform_fee, undefined, 'POD charges must not include platform_fee for a customer');
+  assert.ok(pod.json.data.charges.customer_price > 0, 'POD charges must still show the customer-facing fee');
+
+  const receipt = await request(`/api/deliveries/${deliveryId}/receipt`, { token: customer.token });
+  assert.equal(receipt.response.status, 200, receipt.json.error);
+  assert.equal(receipt.json.data.amounts.platform_fee, undefined, 'receipt must not include platform_fee for a customer');
+  assert.equal(receipt.json.data.amounts.rider_earnings, undefined, 'receipt must not include rider_earnings for a customer');
+  assert.ok(receipt.json.data.amounts.delivery_fee > 0, 'receipt must still show the customer-facing delivery fee');
+
+  const adminPod = await request(`/api/deliveries/${deliveryId}/pod`, { token: admin });
+  assert.equal(adminPod.response.status, 200, adminPod.json.error);
+  assert.ok(adminPod.json.data.charges.rider_earnings > 0, 'admin POD view keeps the full financial breakdown (spec §7A.7)');
+  assert.ok(adminPod.json.data.charges.platform_fee > 0, 'admin POD view keeps the full financial breakdown (spec §7A.7)');
+
+  const adminReceipt = await request(`/api/deliveries/${deliveryId}/receipt`, { token: admin });
+  assert.equal(adminReceipt.response.status, 200, adminReceipt.json.error);
+  assert.ok(adminReceipt.json.data.amounts.rider_earnings > 0, 'admin receipt view keeps the full financial breakdown (spec §7A.7)');
+  assert.ok(adminReceipt.json.data.amounts.platform_fee > 0, 'admin receipt view keeps the full financial breakdown (spec §7A.7)');
+});
+
+test('the backend hands down tiered location tracking thresholds, tighter once a delivery is active (spec §13.6)', async () => {
+  const admin = await adminToken();
+  const rider = await onlineRider(admin);
+
+  const idle = await request('/api/rider/location', { method: 'PUT', token: rider.token, body: { lat: PICKUP.lat, lng: PICKUP.lng, accuracy: 12 } });
+  assert.equal(idle.response.status, 200, idle.json.error);
+  const idleTracking = idle.json.data.tracking;
+  assert.ok(idleTracking, 'location update must hand down a tracking config, not a client-hardcoded interval');
+  assert.ok(idleTracking.interval_ms > 0);
+  assert.ok(idleTracking.min_distance_m >= 0);
+  assert.ok(idleTracking.min_accuracy_m >= 0);
+
+  const home = await request('/api/mobile/v1/rider/home', { token: rider.token });
+  assert.equal(home.response.status, 200, home.json.error);
+  assert.deepEqual(home.json.data.tracking, idleTracking, 'the home fetch must agree with /location on the current tier before the service ever starts');
+
+  const customer = await register('customer');
+  const created = await request('/api/deliveries', { method: 'POST', token: customer.token, body: deliveryBody() });
+  assert.equal(created.response.status, 201, created.json.error);
+  const accepted = await request(`/api/deliveries/${created.json.data.delivery.id}/accept`, { method: 'PUT', token: rider.token, body: {} });
+  assert.equal(accepted.response.status, 200, accepted.json.error);
+
+  const active = await request('/api/rider/location', { method: 'PUT', token: rider.token, body: { lat: PICKUP.lat, lng: PICKUP.lng, accuracy: 12 } });
+  assert.equal(active.response.status, 200, active.json.error);
+  assert.ok(active.json.data.tracking.interval_ms < idleTracking.interval_ms, 'an active delivery must be polled more tightly than idle availability');
 });
 
 test('a customer price quote never includes the rider payout breakdown', async () => {
@@ -310,17 +361,19 @@ test('a customer price quote never includes the rider payout breakdown', async (
   assert.ok(adminPriced.json.data.riderEarnings > 0, 'the admin pricing simulator (spec §52) keeps the full breakdown');
 });
 
-test('nearby-riders reports in_service_area so the client can distinguish "no riders now" from "MOVO does not operate here" (spec §12)', async () => {
+test('nearby-riders reports in_service_area so the client can distinguish "no riders now" from "MOVO does not operate here" (spec §12), without naming individual riders (blind dispatch decision)', async () => {
   const customer = await register('customer');
 
   const inArea = await request(`/api/mobile/v1/customer/nearby-riders?lat=${PICKUP.lat}&lng=${PICKUP.lng}&radius_km=5`, { token: customer.token });
   assert.equal(inArea.response.status, 200, inArea.json.error);
   assert.equal(inArea.json.data.in_service_area, true);
   assert.ok(inArea.json.data.zone?.name);
+  assert.equal(inArea.json.data.riders, undefined, 'dispatch is blind: a customer must never see individually identified riders (spec §12)');
+  assert.ok(typeof inArea.json.data.rider_count === 'number');
 
   const outOfArea = await request(`/api/mobile/v1/customer/nearby-riders?lat=${OUT_OF_AREA.lat}&lng=${OUT_OF_AREA.lng}&radius_km=5`, { token: customer.token });
   assert.equal(outOfArea.response.status, 200, outOfArea.json.error);
   assert.equal(outOfArea.json.data.in_service_area, false);
   assert.equal(outOfArea.json.data.zone, null);
-  assert.deepEqual(outOfArea.json.data.riders, []);
+  assert.equal(outOfArea.json.data.rider_count, 0);
 });

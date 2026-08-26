@@ -371,12 +371,22 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS analytics_events (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    user_id TEXT,
+    role TEXT,
+    properties TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_deliveries_customer ON deliveries(customer_id);
   CREATE INDEX IF NOT EXISTS idx_deliveries_rider ON deliveries(rider_id);
   CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
   CREATE INDEX IF NOT EXISTS idx_deliveries_business ON deliveries(business_id);
   CREATE INDEX IF NOT EXISTS idx_rider_locations_rider ON rider_locations(rider_id);
   CREATE INDEX IF NOT EXISTS idx_delivery_offers_rider ON delivery_offers(rider_id,status,expires_at);
+  CREATE INDEX IF NOT EXISTS idx_analytics_events_name ON analytics_events(name,created_at);
   CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_reporter ON tickets(reporter_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
@@ -635,6 +645,12 @@ function seedData() {
       ['cancel_fee_rider',0],['waiting_fee_per_min',100],['max_waiting_free_min',5],
       ['rider_accept_timeout_sec',30],['rider_search_radius_km',5],['rider_search_expand_km',2],
       ['currency','RWF'],['currency_symbol','FRW'],
+      // Rider location tracking cadence (spec §13.6): tighter while a delivery/ride is
+      // active, looser while the rider is just available and idle, so idle phones aren't
+      // drained for no dispatch benefit. Handed down to the client on every location PUT
+      // rather than hardcoded in the app, so ops can retune cadence without a client release.
+      ['rider_location_interval_active_sec',8],['rider_location_interval_idle_sec',30],
+      ['rider_location_min_distance_m',25],['rider_location_min_accuracy_m',50],
       // Ride-hailing (Maputo, Mozambique) pricing — kept separate from the parcel
       // delivery config above so the two marketplaces can be tuned independently.
       ['ride_platform_fee_percent','20'],['ride_min_fare','100'],
@@ -703,7 +719,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 }
 
 const DELIVERY_STATUSES = new Set([
-  'created', 'scheduled', 'searching', 'awaiting_rider_selection', 'assigned', 'going_pickup',
+  'created', 'scheduled', 'searching', 'assigned', 'going_pickup',
   'arrived_pickup', 'picked_up', 'in_transit', 'arrived_dest', 'delivered', 'cancelled', 'failed'
 ]);
 
@@ -793,6 +809,21 @@ function customerDeliveryView(user, delivery) {
   delete view.rider_earnings;
   delete view.platform_fee;
   return view;
+}
+
+// Same §7A separation rule as customerDeliveryView(), for the financial fields
+// surfaced by /pod and /receipt: admin sees everything, a rider sees only their
+// own payout, a customer/business sees only the customer-facing fee.
+function financialFieldsFor(user, delivery) {
+  const fields = {
+    customer_price: delivery.customer_price,
+    platform_fee: delivery.platform_fee,
+    rider_earnings: delivery.rider_earnings,
+    total_charge: delivery.total_charge
+  };
+  if (user.role === 'admin') return fields;
+  if (user.role === 'rider') return { rider_earnings: fields.rider_earnings };
+  return { customer_price: fields.customer_price, total_charge: fields.total_charge };
 }
 
 function deliveryView(user, delivery) {
@@ -1120,6 +1151,14 @@ function roleAuth(...roles) {
   };
 }
 
+/** Gates a route behind a runtime.features flag (see GET /api/config), before any heavier work (e.g. a file upload) runs. */
+function requireFeature(name) {
+  return (req, res, next) => {
+    if (!runtime.features[name]) return resErr(res, 'This feature is currently disabled', 403, 'feature_disabled');
+    next();
+  };
+}
+
 // ─── Credential-attack controls ──────────────────────────────
 function lockoutState(user) {
   if (!user?.locked_until) return { locked: false };
@@ -1428,7 +1467,7 @@ app.get('/api/rider/incidents', auth, roleAuth('rider'), route((req, res) => {
 
 // ─── Rider offer feed (spec §7.4) ────────────────────────────
 app.get('/api/mobile/v1/rider/offers', auth, roleAuth('rider'), route((req, res) => {
-  expireSelectedOffers();
+  expireLapsedOffers();
   const offers = db.prepare(`SELECT o.id AS offer_id,o.expires_at,o.created_at,
       d.id,d.order_no,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,
       d.dest_address,d.dest_lat,d.dest_lng,d.rider_earnings,d.distance_km,d.item_description,d.special_instructions
@@ -1438,9 +1477,22 @@ app.get('/api/mobile/v1/rider/offers', auth, roleAuth('rider'), route((req, res)
   resOK(res, { offers, serverTime: new Date().toISOString() });
 }));
 
+// Cadence handed down to the rider app so tracking intervals live in ops config,
+// not hardcoded in the client (spec §13.6).
+function locationTrackingConfig(hasActiveWork) {
+  const activeSec = Math.max(1, parseInt(getConfig('rider_location_interval_active_sec', '8'), 10) || 8);
+  const idleSec = Math.max(1, parseInt(getConfig('rider_location_interval_idle_sec', '30'), 10) || 30);
+  return {
+    interval_ms: (hasActiveWork ? activeSec : idleSec) * 1000,
+    min_distance_m: Math.max(0, parseInt(getConfig('rider_location_min_distance_m', '25'), 10) || 0),
+    min_accuracy_m: Math.max(0, parseInt(getConfig('rider_location_min_accuracy_m', '50'), 10) || 0)
+  };
+}
+
 app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   const { lat, lng } = req.body;
   if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng)) || Math.abs(Number(lat)) > 90 || Math.abs(Number(lng)) > 180) return resErr(res, 'Valid latitude and longitude required');
+  const accuracy = req.body.accuracy === undefined ? null : Number(req.body.accuracy);
   const rider = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(req.user.id);
   if (!rider || rider.approval_status !== 'approved' || !['online','busy'].includes(rider.online_status)) return resErr(res, 'Approved online rider required', 403);
   db.prepare('UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime(\'now\') WHERE user_id=?')
@@ -1450,11 +1502,11 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng) VALUES (?,?,?,?,?,?)').run(uuidv4(), req.user.id, activeDelivery?.id || null, activeRide?.id || null, lat, lng);
   if (activeDelivery) io.to(`delivery:${activeDelivery.id}`).emit('rider_location', { delivery_id: activeDelivery.id, lat: Number(lat), lng: Number(lng) });
   if (activeRide) io.to(`ride:${activeRide.id}`).emit('driver_location', { ride_id: activeRide.id, lat: Number(lat), lng: Number(lng) });
-  resOK(res, { message: 'Location updated' });
+  resOK(res, { message: 'Location updated', tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide)) });
 });
 
 app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
-  expireSelectedOffers();
+  expireLapsedOffers();
   expireRideOffers();
   const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_rides,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.vehicle_type,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,r.car_make,r.car_model,r.car_color,r.car_plate,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
   const activeDelivery = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
@@ -1463,18 +1515,19 @@ app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
     FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id WHERE o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
   const rideOffers = db.prepare(`SELECT o.id as offer_id,o.expires_at,r.id,r.ride_no,r.pickup_address,r.pickup_lat,r.pickup_lng,r.dest_address,r.dest_lat,r.dest_lng,r.driver_earnings,r.distance_km,r.estimated_minutes
     FROM ride_offers o JOIN rides r ON r.id=o.ride_id WHERE o.driver_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
-  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, activeRide, offers, rideOffers, serverTime: new Date().toISOString() });
+  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, activeRide, offers, rideOffers, tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide)), serverTime: new Date().toISOString() });
 });
 
 app.put('/api/mobile/v1/rider/offers/:offerId/decline', auth, roleAuth('rider'), (req, res) => {
-  const offer = db.prepare("SELECT o.id,o.delivery_id,d.dispatch_mode FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id WHERE o.id=? AND o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now')").get(req.params.offerId, req.user.id);
+  const offer = db.prepare("SELECT id,delivery_id FROM delivery_offers WHERE id=? AND rider_id=? AND status='offered' AND expires_at>datetime('now')").get(req.params.offerId, req.user.id);
   if (!offer) return resErr(res, 'Offer is unavailable', 409);
   db.transaction(() => {
     db.prepare("UPDATE delivery_offers SET status='declined',responded_at=datetime('now') WHERE id=?").run(offer.id);
     db.prepare('UPDATE riders SET declined_offers=COALESCE(declined_offers,0)+1 WHERE user_id=?').run(req.user.id);
-    if (offer.dispatch_mode === 'selected') updateDeliveryStatus(offer.delivery_id, 'awaiting_rider_selection', { note: 'Selected rider declined' });
   })();
-  if (offer.dispatch_mode === 'selected') emitDeliveryUpdate(offer.delivery_id, { status: 'awaiting_rider_selection' });
+  // The blind broadcast (dispatchDelivery) already offered this delivery to several
+  // other nearby riders in parallel and keeps expanding radius on timeout, so a
+  // single decline needs no special handling here.
   resOK(res, { message: 'Offer declined' });
 });
 
@@ -1546,7 +1599,7 @@ app.get('/api/rider/active-delivery', auth, roleAuth('rider'), (req, res) => {
   resOK(res, d || null);
 });
 
-app.post('/api/rider/deliveries/:id/proof', auth, roleAuth('rider'), upload.single('proof'), (req, res) => {
+app.post('/api/rider/deliveries/:id/proof', auth, roleAuth('rider'), requireFeature('podPhotoEnabled'), upload.single('proof'), (req, res) => {
   const d = db.prepare("SELECT status FROM deliveries WHERE id=? AND rider_id=?").get(req.params.id, req.user.id);
   if (!d || !['arrived_pickup','arrived_dest'].includes(d.status)) return resErr(res, 'Proof is not accepted at this delivery stage', 409);
   if (!req.file) return resErr(res, 'A JPEG, PNG, or WebP proof image is required');
@@ -1639,27 +1692,14 @@ app.post('/api/deliveries/price', auth, (req, res) => {
   } catch(e) { resErr(res, e.message); }
 });
 
-function expireSelectedOffers() {
-  const transitioned = db.transaction(() => {
-    db.prepare("UPDATE delivery_offers SET status='expired',responded_at=COALESCE(responded_at,datetime('now')) WHERE status='offered' AND expires_at<=datetime('now')").run();
-    const candidates = db.prepare(`SELECT d.id FROM deliveries d
-      WHERE d.dispatch_mode='selected' AND d.status='searching'
-        AND NOT EXISTS (SELECT 1 FROM delivery_offers o WHERE o.delivery_id=d.id AND o.status='offered' AND o.expires_at>datetime('now'))`).all();
-    const ids = [];
-    const transition = db.prepare("UPDATE deliveries SET status='awaiting_rider_selection',updated_at=datetime('now') WHERE id=? AND dispatch_mode='selected' AND status='searching'");
-    for (const candidate of candidates) {
-      if (!transition.run(candidate.id).changes) continue;
-      addEvent(candidate.id, 'awaiting_rider_selection', null, null, 'Selected rider offer expired');
-      ids.push(candidate.id);
-    }
-    return ids;
-  })();
-  for (const deliveryId of transitioned) emitDeliveryUpdate(deliveryId, { status: 'awaiting_rider_selection' });
-  return transitioned;
+// Offers past their acceptance window are swept lazily on read, rather than on a
+// timer, so a restart never loses track of an expiry.
+function expireLapsedOffers() {
+  db.prepare("UPDATE delivery_offers SET status='expired',responded_at=COALESCE(responded_at,datetime('now')) WHERE status='offered' AND expires_at<=datetime('now')").run();
 }
 
 function customerDeliveries(user) {
-  expireSelectedOffers();
+  expireLapsedOffers();
   const canonicalPhone = normalizePhone(user.phone);
   return db.prepare(`SELECT * FROM deliveries
     WHERE customer_id=? OR (? IS NOT NULL AND normalize_phone(dest_phone)=?)
@@ -1696,8 +1736,11 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
   // §12), not later at quote time — otherwise "no riders nearby" and "MOVO
   // doesn't operate here at all" look identical to the client.
   const zone = findZone(lat, lng);
+  // Dispatch is blind and zone-based (spec §12): a customer learns whether riders
+  // are around at all, never which ones, so there's nothing here to browse or
+  // solicit by name ahead of assignment — see the rider-selection decision record.
   resOK(res, {
-    riders: eligibleNearbyRiders(lat, lng, radiusKm), radius_km: radiusKm,
+    rider_count: eligibleNearbyRiders(lat, lng, radiusKm).length, radius_km: radiusKm,
     in_service_area: Boolean(zone), zone: zone ? { id: zone.id, name: zone.name } : null,
     serverTime: new Date().toISOString()
   });
@@ -1739,7 +1782,10 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
     service_type, pickup_address, pickup_lat, pickup_lng, pickup_name, pickup_phone, pickup_instructions,
     dest_address, dest_lat, dest_lng, dest_name, dest_phone, dest_instructions,
     item_description, item_weight, item_category, special_instructions,
-    payment_method, preferred_time, business_ref, department, preferred_rider_id, scheduled_for
+    payment_method, preferred_time, business_ref, department, scheduled_for
+    // No preferred_rider_id: dispatch is blind and zone-based (spec §12) — a customer
+    // or business never gets to browse or hand-pick an identified rider, so the field
+    // is intentionally not read from the request body at all.
   } = body;
 
   if (!pickup_address || !dest_address || !pickup_name || !pickup_phone || !dest_name || !dest_phone) {
@@ -1758,14 +1804,10 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
     throw new ValidationError('MOVO is not currently available at this location.', { code: 'out_of_service_area', status: 422 });
   }
   if (price.error) throw new ValidationError('Cannot calculate price for this route', { code: price.error, status: 422 });
-  if (preferred_rider_id) {
-    const selectionRadius = Math.min(20, parseFloat(getConfig('rider_search_radius_km', '5')) || 5);
-    const eligible = eligibleNearbyRiders(pickupLat, pickupLng, selectionRadius).some(rider => rider.id === preferred_rider_id);
-    if (!eligible) throw new ValidationError('Selected rider is not eligible or nearby', { code: 'rider_unavailable', status: 409 });
-  }
 
   // A scheduled request waits in the queue until its window opens (spec §8.4).
   const scheduledFor = validate.optionalString(scheduled_for, 'scheduled_for', { max: 40 });
+  if (scheduledFor && !runtime.features.scheduledDeliveryEnabled) throw new ValidationError('Scheduled deliveries are currently unavailable', { code: 'feature_disabled', status: 403 });
   const scheduledDate = scheduledFor ? new Date(scheduledFor) : null;
   if (scheduledFor && Number.isNaN(scheduledDate?.getTime())) throw new ValidationError('scheduled_for must be an ISO timestamp', { code: 'invalid_timestamp', field: 'scheduled_for' });
   const isScheduled = Boolean(scheduledDate && scheduledDate.getTime() > Date.now() + 60_000);
@@ -1781,25 +1823,21 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
     dest_address,dest_lat,dest_lng,dest_name,dest_phone,dest_instructions,delivery_otp,
     item_description,item_weight,item_category,special_instructions,
     origin_zone,dest_zone,distance_km,customer_price,rider_earnings,platform_fee,total_charge,
-    payment_method,preferred_time,business_ref,department,preferred_rider_id,dispatch_mode,scheduled_for,
+    payment_method,preferred_time,business_ref,department,scheduled_for,
     idempotency_actor_id,idempotency_key,idempotency_hash
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, orderNo, actor.id, actor.role === 'business' ? actor.id : null, service_type, isScheduled ? 'scheduled' : 'created',
     pickup_address, pickupLat, pickupLng, pickup_name, pickupPhone, pickup_instructions || null, pickupOtp,
     dest_address, destLat, destLng, dest_name, destPhone, dest_instructions || null, deliveryOtp,
     item_description || null, item_weight || null, item_category || null, special_instructions || null,
     price.originZone.name, price.destZone.name, price.distance_km,
     price.customerPrice, price.riderEarnings, price.platformFee, price.totalCharge,
-    payment_method || 'mobile_money', preferred_time || null, business_ref || null, department || null,
-    preferred_rider_id || null, preferred_rider_id ? 'selected' : 'automatic', isScheduled ? scheduledDate.toISOString() : null,
+    payment_method || 'mobile_money', preferred_time || null, business_ref || null, department || null, isScheduled ? scheduledDate.toISOString() : null,
     idempotencyKey ? actor.id : null, idempotencyKey, idempotencyHash
   );
   addEvent(id, isScheduled ? 'scheduled' : 'created', pickupLat, pickupLng, isScheduled ? `Scheduled for ${scheduledDate.toISOString()}` : 'Delivery requested');
 
-  if (!isScheduled) {
-    if (preferred_rider_id) dispatchSelectedDelivery(id, preferred_rider_id);
-    else dispatchDelivery(id);
-  }
+  if (!isScheduled) dispatchDelivery(id);
   return { id, scheduled: isScheduled, delivery: db.prepare('SELECT * FROM deliveries WHERE id=?').get(id) };
 }
 
@@ -1841,18 +1879,6 @@ app.post('/api/business/deliveries/bulk', auth, roleAuth('business'), route((req
   resOK(res, { created, rejected, summary: { requested: rows.length, created: created.length, rejected: rejected.length } }, created.length ? 201 : 400);
 }));
 
-app.put('/api/deliveries/:id/select-rider', auth, roleAuth('customer','business'), (req, res) => {
-  expireSelectedOffers();
-  const delivery = db.prepare('SELECT * FROM deliveries WHERE id=?').get(req.params.id);
-  if (!delivery || (delivery.customer_id !== req.user.id && delivery.business_id !== req.user.id)) return resErr(res, 'Not found', 404);
-  if (delivery.status !== 'awaiting_rider_selection') return resErr(res, 'Delivery is not awaiting rider selection', 409);
-  if (!req.body.preferred_rider_id) return resErr(res, 'preferred_rider_id is required');
-  try {
-    dispatchSelectedDelivery(delivery.id, req.body.preferred_rider_id);
-    resOK(res, { delivery: deliveryView(req.user, db.prepare('SELECT * FROM deliveries WHERE id=?').get(delivery.id)) });
-  } catch (error) { resErr(res, error.message, 409); }
-});
-
 app.get('/api/deliveries', auth, route((req, res) => {
   const { limit, offset } = validate.pagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   let query, params;
@@ -1891,7 +1917,7 @@ app.get('/api/deliveries/:id', auth, (req, res) => {
 });
 
 app.get('/api/deliveries/:id/track', auth, (req, res) => {
-  expireSelectedOffers();
+  expireLapsedOffers();
   const d = db.prepare('SELECT * FROM deliveries WHERE id=?').get(req.params.id);
   if (!d) return resErr(res, 'Delivery not found', 404);
   if (!canAccessDelivery(req.user, d)) return resErr(res, 'Not found', 404);
@@ -2003,7 +2029,7 @@ app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), otpHandoverLimi
     }, 'arrived_dest');
     if (!moved) return false;
     db.prepare("UPDATE deliveries SET pod_reference=? WHERE id=?").run(podReference, d.id);
-    if (signature) db.prepare("UPDATE deliveries SET delivery_notes=COALESCE(delivery_notes,'') || ? WHERE id=?")
+    if (signature && runtime.features.signatureEnabled) db.prepare("UPDATE deliveries SET delivery_notes=COALESCE(delivery_notes,'') || ? WHERE id=?")
       .run(` | signed: ${String(signature).slice(0, 120)}`, d.id);
     db.prepare("UPDATE riders SET total_deliveries=total_deliveries+1, online_status='online', availability='online', updated_at=datetime('now') WHERE user_id=?")
       .run(req.user.id);
@@ -2032,7 +2058,7 @@ app.put('/api/deliveries/:id/cancel', auth, route((req, res) => {
   if (!d) return resErr(res, 'Delivery not found', 404, 'delivery_not_found');
   if (['delivered','cancelled','failed'].includes(d.status)) return resErr(res, 'Cannot cancel this delivery', 409, 'invalid_state');
   const isCustomer = req.user.id === d.customer_id || req.user.id === d.business_id;
-  const canCancel = (isCustomer && ['scheduled','created','searching','awaiting_rider_selection','assigned'].includes(d.status)) ||
+  const canCancel = (isCustomer && ['scheduled','created','searching','assigned'].includes(d.status)) ||
                     (req.user.id === d.rider_id && ['assigned','going_pickup'].includes(d.status)) ||
                     req.user.role === 'admin';
   if (!canCancel) return resErr(res, 'Cannot cancel at this stage', 409, 'invalid_state');
@@ -2084,7 +2110,7 @@ app.get('/api/deliveries/:id/pod', auth, route((req, res) => {
     delivery: { address: d.dest_address, recipient: d.recipient_name || d.dest_name, verified_at: d.delivery_verified_at, otp_verified: Boolean(d.delivery_verified_at), photo: d.delivery_photo ? `/api/deliveries/${d.id}/proof/delivery` : null, notes: d.delivery_notes },
     rider: rider ? { name: rider.full_name, plate: rider.motorcycle_plate } : null,
     coordinates: events,
-    charges: { customer_price: d.customer_price, platform_fee: d.platform_fee, rider_earnings: d.rider_earnings, total_charge: d.total_charge, payment_method: d.payment_method, payment_status: d.payment_status }
+    charges: { ...financialFieldsFor(req.user, d), payment_method: d.payment_method, payment_status: d.payment_status }
   });
 }));
 
@@ -2113,10 +2139,11 @@ app.get('/api/deliveries/:id/receipt', auth, route((req, res) => {
     service_type: d.service_type,
     route: { from: d.pickup_address, to: d.dest_address, zone_from: d.origin_zone, zone_to: d.dest_zone, distance_km: d.distance_km },
     amounts: {
-      delivery_fee: d.customer_price,
-      platform_fee: d.platform_fee,
+      ...(req.user.role === 'rider'
+        ? { rider_earnings: d.rider_earnings }
+        : { delivery_fee: d.customer_price, total: (d.status === 'cancelled' ? (d.cancellation_fee || 0) : d.total_charge) }),
+      ...(req.user.role === 'admin' ? { platform_fee: d.platform_fee, rider_earnings: d.rider_earnings } : {}),
       cancellation_fee: d.cancellation_fee || 0,
-      total: (d.status === 'cancelled' ? (d.cancellation_fee || 0) : d.total_charge),
       currency: getConfig('currency', 'RWF')
     },
     payment: { method: d.payment_method, status: d.payment_status, reference: d.payment_ref, paid_at: d.paid_at },
@@ -2177,6 +2204,7 @@ function rideView(user, ride) {
 }
 
 app.post('/api/rides', auth, roleAuth('customer'), route((req, res) => {
+  if (!runtime.features.paymentsEnabled) throw new ValidationError('Ride requests are temporarily unavailable', { code: 'payments_disabled', status: 503 });
   const { pickup_address, pickup_lat, pickup_lng, dest_address, dest_lat, dest_lng, ride_type_id, payment_method, share_contact_name, share_contact_phone } = req.body;
   if (!pickup_address || !dest_address) throw new ValidationError('Pickup and destination addresses are required', { code: 'missing_field' });
   const pickupLat = validate.latitude(pickup_lat, 'pickup_lat');
@@ -3004,36 +3032,6 @@ function emitDeliveryUpdate(deliveryId, payload = {}) {
   io.to(`delivery:${deliveryId}`).emit('delivery_update', { delivery_id: deliveryId, ...payload });
 }
 
-function dispatchSelectedDelivery(deliveryId, riderId) {
-  const delivery = db.prepare('SELECT * FROM deliveries WHERE id=?').get(deliveryId);
-  if (!delivery) throw new Error('Delivery not found');
-  const radius = Math.min(20, parseFloat(getConfig('rider_search_radius_km', '5')) || 5);
-  const rider = eligibleNearbyRiders(Number(delivery.pickup_lat), Number(delivery.pickup_lng), radius).find(candidate => candidate.id === riderId);
-  if (!rider) throw new Error('Selected rider is not eligible or nearby');
-  const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'), 10) || 30;
-  const offerId = uuidv4();
-  db.transaction(() => {
-    db.prepare("UPDATE delivery_offers SET status='expired',responded_at=datetime('now') WHERE delivery_id=? AND status='offered'").run(deliveryId);
-    db.prepare("UPDATE deliveries SET preferred_rider_id=?,dispatch_mode='selected',status='searching',updated_at=datetime('now') WHERE id=?").run(riderId, deliveryId);
-    db.prepare("INSERT INTO delivery_offers (id,delivery_id,rider_id,expires_at) VALUES (?,?,?,datetime('now',?))")
-      .run(offerId, deliveryId, riderId, `+${timeoutSeconds} seconds`);
-    addEvent(deliveryId, 'searching', null, null, 'Waiting for selected rider');
-  })();
-  emitToUser(riderId, 'new_delivery', {
-    offer_id: offerId,
-    id: delivery.id, order_no: delivery.order_no, service_type: delivery.service_type,
-    pickup_address: delivery.pickup_address, pickup_lat: delivery.pickup_lat, pickup_lng: delivery.pickup_lng,
-    pickup_name: delivery.pickup_name, pickup_phone: delivery.pickup_phone,
-    dest_address: delivery.dest_address, dest_lat: delivery.dest_lat, dest_lng: delivery.dest_lng,
-    dest_name: delivery.dest_name, dest_phone: delivery.dest_phone,
-    earnings: delivery.rider_earnings, distance_km: delivery.distance_km,
-    timeout: timeoutSeconds
-  });
-  setTimeout(() => {
-    expireSelectedOffers();
-  }, timeoutSeconds * 1000 + 50);
-}
-
 function dispatchDelivery(deliveryId) {
   updateDeliveryStatus(deliveryId, 'searching');
   const d = db.prepare('SELECT * FROM deliveries WHERE id=?').get(deliveryId);
@@ -3154,14 +3152,13 @@ function dispatchRide(rideId) {
  * timer rather than a per-delivery timeout so a restart never loses a booking.
  */
 function releaseScheduledDeliveries() {
-  const due = db.prepare("SELECT id,preferred_rider_id FROM deliveries WHERE status='scheduled' AND scheduled_for IS NOT NULL AND scheduled_for <= datetime('now') LIMIT 25").all();
+  const due = db.prepare("SELECT id FROM deliveries WHERE status='scheduled' AND scheduled_for IS NOT NULL AND scheduled_for <= datetime('now') LIMIT 25").all();
   for (const delivery of due) {
     try {
       const claimed = db.prepare("UPDATE deliveries SET status='created',updated_at=datetime('now') WHERE id=? AND status='scheduled'").run(delivery.id).changes;
       if (!claimed) continue;
       addEvent(delivery.id, 'created', null, null, 'Scheduled delivery released to dispatch');
-      if (delivery.preferred_rider_id) dispatchSelectedDelivery(delivery.id, delivery.preferred_rider_id);
-      else dispatchDelivery(delivery.id);
+      dispatchDelivery(delivery.id);
     } catch (error) {
       logger.error('scheduled_release_failed', { deliveryId: delivery.id, message: error.message });
     }
@@ -3261,6 +3258,34 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+/**
+ * Feature flags and client-relevant provider info, unauthenticated so every app
+ * (including a signed-out customer) can fetch it before login to decide what UI
+ * to show, without a client release for every toggle.
+ */
+app.get('/api/config', (req, res) => {
+  resOK(res, { features: runtime.features, map_provider: runtime.providers.maps });
+});
+
+// ─── Analytics events (spec §78) ─────────────────────────────
+// A fixed catalog, not free-form strings, so a typo'd client event name fails
+// loudly in review instead of silently fragmenting the data.
+const ANALYTICS_EVENTS = [
+  'quote_viewed', 'delivery_confirmed', 'delivery_completed',
+  'ride_requested', 'ride_completed',
+  'rider_went_online', 'rider_went_offline',
+  'offer_accepted', 'offer_declined'
+];
+
+/** Client-fired product analytics (spec §78). Never lets a bad event break the caller's flow. */
+app.post('/api/analytics/events', auth, route((req, res) => {
+  const name = validate.oneOf(req.body.name, ANALYTICS_EVENTS, 'name');
+  const properties = req.body.properties && typeof req.body.properties === 'object' ? req.body.properties : {};
+  db.prepare('INSERT INTO analytics_events (id,name,user_id,role,properties) VALUES (?,?,?,?,?)')
+    .run(uuidv4(), name, req.user.id, req.user.role, JSON.stringify(properties).slice(0, 4000));
+  resOK(res, { recorded: true }, 201);
+}));
 
 /** Readiness reflects dependency and configuration health, so orchestrators can gate traffic. */
 app.get('/ready', (req, res) => {

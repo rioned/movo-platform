@@ -367,3 +367,19 @@ test('the portal exposes account suspension and richer rider facts', () => {
   assert.match(portal, /<form class="space-y-3" onsubmit="event\.preventDefault\(\);handleLogin\(\)"/);
   assert.match(portal, /rel="icon"/);
 });
+
+test('the live map clusters rider markers and list search inputs are debounced', () => {
+  const portal = fs.readFileSync(path.join(root, 'public/admin/index.html'), 'utf8');
+  // Marker clustering: the plugin is loaded and rider markers are added to a cluster
+  // group, not individually to the map, so a busy zone doesn't render an unreadable
+  // pile of overlapping icons.
+  assert.match(portal, /leaflet\.markercluster/);
+  assert.match(portal, /L\.markerClusterGroup/);
+  assert.match(portal, /adminMapRiderCluster\.addLayer\(marker\)/);
+  // Search-as-you-type inputs must be debounced, not fire an API call per keystroke.
+  assert.match(portal, /function debounce\(/);
+  assert.match(portal, /oninput="debouncedLoadAdminDeliveries\(\)"/);
+  assert.match(portal, /oninput="debouncedLoadRiders\(\)"/);
+  assert.match(portal, /const debouncedLoadAdminDeliveries=debounce\(loadAdminDeliveries/);
+  assert.match(portal, /const debouncedLoadRiders=debounce\(loadRiders/);
+});

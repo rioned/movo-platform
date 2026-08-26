@@ -78,6 +78,17 @@ function loadRuntimeConfig(env = process.env) {
     dispatch: {
       offerTimeoutSeconds: positiveInteger(env.DISPATCH_OFFER_TIMEOUT_SEC, 30, 'DISPATCH_OFFER_TIMEOUT_SEC'),
       initialRadiusKm: positiveNumber(env.DISPATCH_RADIUS_KM, 5, 'DISPATCH_RADIUS_KM')
+    },
+    // Runtime feature flags, exposed to clients via GET /api/config so the customer,
+    // rider and admin apps can react without a release. Everything defaults to "on"
+    // except chat, which has no backend behind it yet — the flag exists so ops can
+    // announce/gate the client UI ahead of the feature actually shipping.
+    features: {
+      paymentsEnabled: boolean(env.PAYMENTS_ENABLED, true),
+      podPhotoEnabled: boolean(env.POD_PHOTO_ENABLED, true),
+      signatureEnabled: boolean(env.SIGNATURE_ENABLED, true),
+      chatEnabled: boolean(env.CHAT_ENABLED, false),
+      scheduledDeliveryEnabled: boolean(env.SCHEDULED_DELIVERY_ENABLED, true)
     }
   };
 }

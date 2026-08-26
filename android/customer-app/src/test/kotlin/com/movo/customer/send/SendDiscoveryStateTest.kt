@@ -1,7 +1,6 @@
 package com.movo.customer.send
 
 import com.movo.customer.model.Coordinate
-import com.movo.customer.model.NearbyRider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,25 +24,25 @@ class SendDiscoveryStateTest {
         )
 
         phases.forEach { phase ->
-            assertFalse(DiscoverySnapshot(phase, pickupA, listOf(rider())).canContinue())
+            assertFalse(DiscoverySnapshot(phase, pickupA, riderCount = 1).canContinue())
         }
     }
 
     @Test
     fun available_cannot_continue_without_a_valid_pickup() {
-        assertFalse(DiscoverySnapshot(DiscoveryPhase.Available, null, listOf(rider())).canContinue())
+        assertFalse(DiscoverySnapshot(DiscoveryPhase.Available, null, riderCount = 1).canContinue())
         assertFalse(
             DiscoverySnapshot(
                 DiscoveryPhase.Available,
                 Coordinate(Double.NaN, 30.0619),
-                listOf(rider())
+                riderCount = 1
             ).canContinue()
         )
         assertFalse(
             DiscoverySnapshot(
                 DiscoveryPhase.Available,
                 Coordinate(91.0, 30.0619),
-                listOf(rider())
+                riderCount = 1
             ).canContinue()
         )
     }
@@ -55,52 +54,39 @@ class SendDiscoveryStateTest {
 
     @Test
     fun available_can_continue_with_valid_pickup_and_rider() {
-        assertTrue(DiscoverySnapshot(DiscoveryPhase.Available, pickupA, listOf(rider())).canContinue())
+        assertTrue(DiscoverySnapshot(DiscoveryPhase.Available, pickupA, riderCount = 1).canContinue())
     }
 
     @Test
-    fun pickup_change_clears_riders_and_returns_to_scanning() {
-        val old = DiscoverySnapshot(DiscoveryPhase.Available, pickupA, listOf(rider()))
+    fun pickup_change_clears_count_and_returns_to_scanning() {
+        val old = DiscoverySnapshot(DiscoveryPhase.Available, pickupA, riderCount = 3)
 
         val changed = old.invalidateForPickup(pickupB)
 
         assertEquals(DiscoveryPhase.Scanning, changed.phase)
         assertEquals(pickupB, changed.pickup)
-        assertTrue(changed.riders.isEmpty())
+        assertEquals(0, changed.riderCount)
     }
 
     @Test
-    fun null_pickup_clears_riders_and_requires_manual_pickup() {
-        val old = DiscoverySnapshot(DiscoveryPhase.Available, pickupA, listOf(rider()))
+    fun null_pickup_clears_count_and_requires_manual_pickup() {
+        val old = DiscoverySnapshot(DiscoveryPhase.Available, pickupA, riderCount = 3)
 
         val changed = old.invalidateForPickup(null)
 
         assertEquals(DiscoveryPhase.ManualPickupRequired, changed.phase)
         assertNull(changed.pickup)
-        assertTrue(changed.riders.isEmpty())
+        assertEquals(0, changed.riderCount)
     }
 
     @Test
-    fun invalid_pickup_clears_riders_and_requires_manual_pickup() {
-        val old = DiscoverySnapshot(DiscoveryPhase.Available, pickupA, listOf(rider()))
+    fun invalid_pickup_clears_count_and_requires_manual_pickup() {
+        val old = DiscoverySnapshot(DiscoveryPhase.Available, pickupA, riderCount = 3)
 
         val changed = old.invalidateForPickup(Coordinate(Double.POSITIVE_INFINITY, 30.0619))
 
         assertEquals(DiscoveryPhase.ManualPickupRequired, changed.phase)
         assertNull(changed.pickup)
-        assertTrue(changed.riders.isEmpty())
+        assertEquals(0, changed.riderCount)
     }
-
-    private fun rider() = NearbyRider(
-        id = "rider-1",
-        name = "Aline",
-        rating = 4.9,
-        distanceKm = 0.8,
-        location = Coordinate(-1.9430, 30.0625),
-        locationUpdatedAt = "2026-07-29T12:00:00Z",
-        vehicleMake = "TVS",
-        vehicleModel = "HLX",
-        vehiclePlate = "RAA 001A",
-        vehicleColor = "Black"
-    )
 }

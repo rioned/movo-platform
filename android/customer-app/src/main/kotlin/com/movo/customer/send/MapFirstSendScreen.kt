@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -14,14 +15,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import com.movo.customer.analytics.CustomerAnalytics
 import com.movo.customer.dataObject
 import com.movo.customer.location.CustomerLocation
 import com.movo.customer.map.CustomerMap
 import com.movo.customer.model.*
 import com.movo.customer.network.CustomerApi
-import com.movo.customer.network.CustomerApiException
 import com.movo.customer.session.CustomerSession
+import com.movo.design.AnalyticsEvent
+import com.movo.design.maps.LatLng
+import com.movo.design.maps.MapProvider
+import com.movo.design.maps.MapServices
+import com.movo.design.MovoBanner
+import com.movo.design.MovoButton
 import com.movo.design.MovoSpacing
+import com.movo.design.PriceSummary
 import com.movo.design.StatusPill
 import com.movo.design.MovoTone
 import kotlinx.coroutines.Dispatchers
@@ -31,12 +39,15 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 
-private enum class SendStage { Discovery, PickDestination, RequestDetails, QuoteAndRider, Waiting }
+private enum class SendStage { Discovery, PickDestination, RequestDetails, ConfirmRequest, Waiting }
 
 /**
- * The map-first booking journey: see real riders, describe the delivery, approve
- * the price, then choose the rider. Draft state is persisted at every step so a
- * dropped connection or a killed process never costs the customer their input.
+ * The map-first booking journey: see how many riders are actually near, describe
+ * the delivery, approve the price, then request it. Dispatch is blind and
+ * zone-based (spec §12) — the customer never browses or picks a specific rider,
+ * MOVO's backend matches the nearest eligible one automatically. Draft state is
+ * persisted at every step so a dropped connection or a killed process never costs
+ * the customer their input.
  */
 @Composable
 fun MapFirstSendScreen(
@@ -50,14 +61,10 @@ fun MapFirstSendScreen(
     var draft by remember { mutableStateOf(restored?.draft ?: SendDraft(senderName = profile.name, senderPhone = profile.phone, pickupAddress = "Current pickup")) }
     var quote by remember { mutableStateOf(restored?.quote) }
     val creationKey = remember { restored?.creationIdempotencyKey ?: UUID.randomUUID().toString() }
-    val replacementKey = remember { restored?.replacementIdempotencyKey ?: UUID.randomUUID().toString() }
     var existingDeliveryId by remember { mutableStateOf(restored?.deliveryId) }
     var stage by remember { mutableStateOf(SendStage.Discovery) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var riderError by remember { mutableStateOf<String?>(null) }
-    var refreshedRiders by remember { mutableStateOf<List<NearbyRider>>(emptyList()) }
-    var refreshingRiders by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
     var showRationale by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -65,12 +72,26 @@ fun MapFirstSendScreen(
     val activity = context as? Activity
     val location = remember { CustomerLocation(context) }
     val controller = remember { RiderDiscoveryController(customerNearbyRiderSource(api)) }
+    val analytics = remember { CustomerAnalytics(api) }
+    // Defaults to MapProvider.OSM, matching this app's only supported tile backend
+    // today; a future MAP_PROVIDER=sandbox toggle read from the server's config
+    // would flow into this same call, not a new one (spec §63).
+    val geocodingService = remember { MapServices.geocoding(MapProvider.OSM) }
     val snapshot by controller.snapshot.collectAsState()
 
-    fun persist() = session.saveJourney(SendJourney(draft, quote, existingDeliveryId, creationKey, replacementKey))
+    fun persist() = session.saveJourney(SendJourney(draft, quote, existingDeliveryId, creationKey))
     fun locate() = location.requestCurrent { result ->
-        result.onSuccess { draft = draft.copy(pickup = it); persist() }
-            .onFailure { error = it.message }
+        result.onSuccess { coordinate ->
+            draft = draft.copy(pickup = coordinate); persist()
+            // Only replace the placeholder — never overwrite an address the customer already typed.
+            if (draft.pickupAddress.isBlank() || draft.pickupAddress == "Current pickup") {
+                scope.launch {
+                    geocodingService.reverseGeocode(LatLng(coordinate.latitude, coordinate.longitude))?.let { address ->
+                        draft = draft.copy(pickupAddress = address); persist()
+                    }
+                }
+            }
+        }.onFailure { error = it.message }
     }
     val permission = rememberLauncherForActivityResult(RequestMultiplePermissions()) { grants ->
         if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true || grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true) locate()
@@ -123,7 +144,6 @@ fun MapFirstSendScreen(
                     CustomerMap(
                         pickup = draft.pickup,
                         destination = draft.destination,
-                        nearbyMotorcycles = snapshot.riders,
                         modifier = Modifier.fillMaxSize(),
                         discoveryActive = true,
                         showPickupHalo = true
@@ -251,7 +271,8 @@ fun MapFirstSendScreen(
                                 data.optDouble("distance_km"),
                                 data.optInt("estimatedMinutes", data.optInt("estimated_min"))
                             )
-                            persist(); stage = SendStage.QuoteAndRider
+                            analytics.log(AnalyticsEvent.QUOTE_VIEWED, mapOf("service_type" to draft.itemType))
+                            persist(); stage = SendStage.ConfirmRequest
                         }.onFailure { error = it.message }
                         loading = false
                     }
@@ -269,83 +290,58 @@ fun MapFirstSendScreen(
             )
         }
 
-        SendStage.QuoteAndRider -> {
-            if (quote != null) {
-                val pickup = requireNotNull(draft.pickup)
-                val riderSource = remember { customerNearbyRiderSource(api) }
-
-                fun refreshAvailability() {
-                    refreshingRiders = true; riderError = null
-                    scope.launch {
-                        runCatching {
-                            riderSource.scan(pickup)
-                        }.onSuccess { riders ->
-                            refreshedRiders = riders.filter { it.location.isFinite }
-                        }.onFailure { e ->
-                            riderError = e.message ?: "Unable to scan for riders"
-                        }
-                        refreshingRiders = false
-                    }
-                }
-
-                LaunchedEffect(quote) { refreshAvailability() }
-
-                RiderSelectionScreen(
-                    riders = refreshedRiders,
-                    existingDeliveryId = existingDeliveryId,
-                    onRefreshRiders = ::refreshAvailability,
-                    refreshing = refreshingRiders,
+        SendStage.ConfirmRequest -> {
+            val currentQuote = quote
+            val resumeId = existingDeliveryId
+            if (resumeId != null) {
+                // Already created — e.g. the app was killed right after the POST
+                // succeeded. Never re-request; just resume tracking.
+                LaunchedEffect(resumeId) { onTracking(resumeId) }
+            } else if (currentQuote != null) {
+                ConfirmRequestSheet(
+                    quote = currentQuote,
                     submitting = submitting,
-                    quote = quote,
-                    onSelectRider = { riderId ->
-                        submitting = true; error = null; riderError = null
-                        val deliveryId = existingDeliveryId
+                    error = error,
+                    onBack = { quote = null; stage = SendStage.RequestDetails },
+                    onConfirm = {
+                        val pickup = draft.pickup
+                        val destination = draft.destination
+                        if (pickup == null || !pickup.isFinite || destination == null || !destination.isFinite) {
+                            error = "Select valid pickup and destination coordinates"
+                            return@ConfirmRequestSheet
+                        }
+                        submitting = true; error = null
                         scope.launch {
                             runCatching {
-                                if (deliveryId == null) {
-                                    val body = JSONObject().put("service_type", draft.itemType).put("pickup_address", draft.pickupAddress)
-                                        .put("pickup_lat", pickup.latitude).put("pickup_lng", pickup.longitude).put("pickup_name", draft.senderName)
-                                        .put("pickup_phone", draft.senderPhone).put("dest_address", draft.destinationAddress)
-                                        .put("dest_lat", draft.destination!!.latitude).put("dest_lng", draft.destination!!.longitude).put("dest_name", draft.receiverName)
-                                        .put("dest_phone", draft.receiverPhone).put("item_description", draft.itemDescription)
-                                        .put("special_instructions", draft.deliveryInstructions).put("payment_method", draft.paymentMethod)
-                                        .put("preferred_rider_id", riderId)
-                                    api.post("/api/deliveries", body, creationKey).dataObject().optJSONObject("delivery")
-                                        ?: throw IllegalStateException("Delivery response missing")
-                                } else {
-                                    selectReplacement(api, deliveryId, riderId, replacementKey).dataObject()
-                                        .optJSONObject("delivery") ?: JSONObject().put("id", deliveryId).put("status", "searching")
-                                }
+                                val body = JSONObject().put("service_type", draft.itemType).put("pickup_address", draft.pickupAddress)
+                                    .put("pickup_lat", pickup.latitude).put("pickup_lng", pickup.longitude).put("pickup_name", draft.senderName)
+                                    .put("pickup_phone", draft.senderPhone).put("dest_address", draft.destinationAddress)
+                                    .put("dest_lat", destination.latitude).put("dest_lng", destination.longitude).put("dest_name", draft.receiverName)
+                                    .put("dest_phone", draft.receiverPhone).put("item_description", draft.itemDescription)
+                                    .put("special_instructions", draft.deliveryInstructions).put("payment_method", draft.paymentMethod)
+                                api.post("/api/deliveries", body, creationKey).dataObject().optJSONObject("delivery")
+                                    ?: throw IllegalStateException("Delivery response missing")
                             }.onSuccess { delivery ->
-                                val id = delivery.optString("id").ifBlank { deliveryId.orEmpty() }
+                                val id = delivery.optString("id")
                                 if (id.isBlank()) {
                                     error = "Server did not return the delivery ID"
                                     submitting = false
                                 } else {
-                                    val nextReplacementKey = if (deliveryId == null) replacementKey else UUID.randomUUID().toString()
                                     withContext(Dispatchers.IO) {
-                                        session.saveJourney(SendJourney(draft, quote, id, creationKey, nextReplacementKey))
+                                        session.saveJourney(SendJourney(draft, quote, id, creationKey))
                                     }
                                     submitting = false
-                                    if (deliveryId == null) { existingDeliveryId = id; onTracking(id) }
-                                    else onTracking(id)
+                                    existingDeliveryId = id
+                                    analytics.log(AnalyticsEvent.DELIVERY_CONFIRMED, mapOf("service_type" to draft.itemType))
                                     stage = SendStage.Waiting
+                                    onTracking(id)
                                 }
                             }.onFailure { e ->
-                                if (e is CustomerApiException && e.status == 409) {
-                                    riderError = "That rider is no longer available. Choose another."
-                                    refreshAvailability()
-                                } else {
-                                    riderError = e.message ?: "Unable to request this rider"
-                                }
+                                error = e.message ?: "Unable to request a delivery"
                                 submitting = false
                             }
                         }
-                    },
-                    idempotencyKey = creationKey,
-                    replacementIdempotencyKey = replacementKey,
-                    onBack = { quote = null; stage = SendStage.RequestDetails },
-                    error = riderError
+                    }
                 )
             }
         }
@@ -358,6 +354,51 @@ fun MapFirstSendScreen(
                     Spacer(Modifier.height(MovoSpacing.default))
                     Text("Opening live tracking…", style = MaterialTheme.typography.bodyMedium)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The last step before dispatch: approve the price, then request it. There is no
+ * rider to choose here — dispatch is blind and zone-based (spec §12), so MOVO's
+ * backend matches the nearest eligible rider automatically once the request lands.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConfirmRequestSheet(
+    quote: Quote,
+    submitting: Boolean,
+    error: String?,
+    onBack: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Confirm your delivery", style = MaterialTheme.typography.titleLarge) },
+            navigationIcon = { IconButton(onClick = onBack, enabled = !submitting) { Icon(Icons.Filled.ArrowBack, "Back to details") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+        )
+        Column(
+            Modifier.weight(1f).fillMaxWidth().padding(MovoSpacing.default),
+            verticalArrangement = Arrangement.spacedBy(MovoSpacing.default)
+        ) {
+            PriceSummary(total = quote.price, distanceKm = quote.distanceKm, etaMinutes = quote.etaMinutes)
+            Text(
+                "MOVO will match you with the nearest available rider — dispatch is automatic, so there's no rider to choose.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            error?.let { MovoBanner(it, MovoTone.Critical) }
+        }
+        Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+            Column(Modifier.padding(MovoSpacing.default).navigationBarsPadding()) {
+                MovoButton(
+                    text = "Request delivery",
+                    onClick = onConfirm,
+                    enabled = !submitting,
+                    loading = submitting
+                )
             }
         }
     }

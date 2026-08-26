@@ -13,6 +13,9 @@ import com.movo.rider.model.toActiveRide
 import com.movo.rider.model.toDeliveryOffer
 import com.movo.rider.model.toRideOffer
 import com.movo.rider.model.toRiderProfile
+import com.movo.design.AnalyticsEvent
+import com.movo.design.AnalyticsLogger
+import com.movo.design.NoOpAnalyticsLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,7 +39,7 @@ interface RiderGateway {
  * delivery. Every mutation refetches server state afterwards, so the screen shows
  * what the platform accepted — never an optimistic guess about a delivery stage.
  */
-class RiderController(private val gateway: RiderGateway) {
+class RiderController(private val gateway: RiderGateway, private val analytics: AnalyticsLogger = NoOpAnalyticsLogger) {
     private val mutableState = MutableStateFlow(RiderHomeState())
     val state: StateFlow<RiderHomeState> = mutableState.asStateFlow()
 
@@ -59,6 +62,10 @@ class RiderController(private val gateway: RiderGateway) {
         runCatching { gateway.put("/api/rider/status", JSONObject().put("status", status)) }
             .onSuccess {
                 post(RiderMessage.info(if (status == "online") "You are online and receiving offers" else "Availability set to ${status.replace('_', ' ')}"))
+                when (status) {
+                    "online" -> analytics.log(AnalyticsEvent.RIDER_WENT_ONLINE)
+                    "offline" -> analytics.log(AnalyticsEvent.RIDER_WENT_OFFLINE)
+                }
                 refresh()
             }
             .onFailure { post(RiderMessage.error(it.message ?: "Could not change availability")) }
@@ -66,13 +73,13 @@ class RiderController(private val gateway: RiderGateway) {
 
     suspend fun acceptOffer(offer: DeliveryOffer) {
         runCatching { gateway.put("/api/deliveries/${offer.deliveryId}/accept") }
-            .onSuccess { post(RiderMessage.success("Delivery ${offer.orderNo} accepted")); refresh() }
+            .onSuccess { post(RiderMessage.success("Delivery ${offer.orderNo} accepted")); analytics.log(AnalyticsEvent.OFFER_ACCEPTED); refresh() }
             .onFailure { post(RiderMessage.error(it.message ?: "That offer is no longer available")) }
     }
 
     suspend fun declineOffer(offer: DeliveryOffer) {
         runCatching { gateway.put("/api/mobile/v1/rider/offers/${offer.offerId}/decline") }
-            .onSuccess { post(RiderMessage.info("Offer declined")); refresh() }
+            .onSuccess { post(RiderMessage.info("Offer declined")); analytics.log(AnalyticsEvent.OFFER_DECLINED); refresh() }
             .onFailure { post(RiderMessage.error(it.message ?: "Could not decline this offer")) }
     }
 
@@ -97,6 +104,7 @@ class RiderController(private val gateway: RiderGateway) {
                 accepted = true
                 if (response.optBoolean("queued")) post(RiderMessage.info("Saved offline — MOVO will sync this update automatically"))
                 else post(RiderMessage.success(if (action.path == "complete") "Trip completed" else "Status updated"))
+                if (action.path == "complete") analytics.log(AnalyticsEvent.RIDE_COMPLETED)
                 refresh()
             }
             .onFailure { post(RiderMessage.error(it.message ?: "Could not update this ride")) }
@@ -131,6 +139,7 @@ class RiderController(private val gateway: RiderGateway) {
                 } else {
                     post(RiderMessage.success(if (action.path == "complete") "Delivery completed" else "Status updated"))
                 }
+                if (action.path == "complete") analytics.log(AnalyticsEvent.DELIVERY_COMPLETED)
                 refresh()
             }
             .onFailure { post(RiderMessage.error(it.message ?: "Could not update this delivery")) }

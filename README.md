@@ -8,7 +8,7 @@
 
 **Native Android applications**
 
-- **MOVO Customer** — map-first booking with live rider availability, transparent pricing before confirmation, exclusive rider selection, live tracking with handover codes, delivery history, proof of delivery, ratings and support
+- **MOVO Customer** — map-first booking with a transparent price quote before confirmation, blind zone-based rider dispatch (the app shows how many riders are nearby, never a pickable list — see [`ARCHITECTURE.md`](ARCHITECTURE.md)), live tracking with handover codes, delivery history, proof of delivery, ratings and support
 - **MOVO Rider** — GO-online availability, countdown-timed delivery offers, staged pickup and delivery workflow with verification codes and proof photos, navigation and calling, earnings and performance dashboards, document verification, SOS and incident reporting, and an offline queue that never loses a delivery event
 - A shared `:design` Material 3 module so both apps use one brand, one type scale and one delivery-status vocabulary, in light and dark themes
 
@@ -66,7 +66,7 @@ The implementation deliberately keeps the platform a modular monolith. It is a d
 - JWT authentication with bcrypt password hashing
 - Multer for authenticated rider-document uploads
 - Kotlin, Jetpack Compose and Material 3 for both Android applications
-- osmdroid (OpenStreetMap) for in-app maps, with no proprietary map SDK dependency
+- osmdroid (OpenStreetMap) for in-app maps, with no proprietary map SDK dependency; routing and geocoding go through a small provider-swappable abstraction (`:design`'s `maps` package — see [`ARCHITECTURE.md`](ARCHITECTURE.md)) rather than a hardcoded OSRM/Nominatim call
 - Plain HTML, CSS, and JavaScript portal frontends
 - PM2 for process-managed deployments
 - Node's built-in test runner and Gradle/Kotlin unit tests
@@ -189,6 +189,17 @@ Copy `.env.example` to `.env` for local development. Supported settings include:
 | `BCRYPT_ROUNDS` | `10` | Password hashing cost; raise to 12 in production |
 | `RIDER_LOCATION_RETENTION_DAYS` | `30` | Location-breadcrumb retention |
 | `NOTIFICATION_RETENTION_DAYS` | `90` | Read-notification retention |
+| `PAYMENTS_ENABLED` | `true` | Master switch; `false` blocks new ride requests with `503 payments_disabled` |
+| `POD_PHOTO_ENABLED` | `true` | Gates proof-of-delivery photo upload |
+| `SIGNATURE_ENABLED` | `true` | Gates persisting a delivery-completion signature |
+| `CHAT_ENABLED` | `false` | Reserved for the not-yet-built in-app chat feature |
+| `SCHEDULED_DELIVERY_ENABLED` | `true` | Gates scheduling a delivery for a future window |
+
+Feature flags are also readable at runtime via `GET /api/config` (no auth
+required), so clients can react without a release. See
+[`ENVIRONMENT.md`](ENVIRONMENT.md) for the complete list and validation rules,
+and [`API_INTEGRATION.md`](API_INTEGRATION.md#feature-flags) for the response
+shape.
 
 Do not commit `.env`, JWT secrets, real provider credentials, identity documents, database files, or uploaded evidence.
 
@@ -213,7 +224,7 @@ NODE_ENV=test DB_PATH=/tmp/movo-test.db npm test
 
 ## API overview
 
-All JSON endpoints are served under `/api`. Authenticated routes expect the JWT returned by login or OTP verification, normally as a bearer token.
+All JSON endpoints are served under `/api`. Authenticated routes expect the JWT returned by login or OTP verification, normally as a bearer token. See [`API_INTEGRATION.md`](API_INTEGRATION.md) for the complete reference, including feature flags (`GET /api/config`), analytics event ingestion (`POST /api/analytics/events`), error codes, and idempotency.
 
 ### Authentication and profiles
 
@@ -301,7 +312,9 @@ movo-platform/
 │   ├── lib/validate.js        # Request validation with stable error codes
 │   ├── middleware/security.js # Security headers and rate limiting
 │   ├── middleware/observability.js # Structured logging, request IDs, metrics
-│   └── services/messaging.js  # SMS/push provider abstraction
+│   └── services/
+│       ├── messaging.js       # SMS/push provider abstraction
+│       └── payouts.js         # Rider payout provider abstraction
 ├── server.js                  # Express, Socket.IO, API routes, and database setup
 ├── test/                      # Node.js unit, integration, and contract tests
 ├── docs/                      # Design specification, source material, and audits
@@ -338,6 +351,19 @@ Still required before a public launch — these are commercial and assurance ste
 8. Complete the controlled Kigali pilot acceptance journeys for all four roles.
 
 See [`docs/superpowers/specs/2026-07-28-movo-kigali-pilot-mvp-design.md`](docs/superpowers/specs/2026-07-28-movo-kigali-pilot-mvp-design.md) for the binding pilot scope and [`docs/MOVO-spec-compliance-audit.md`](docs/MOVO-spec-compliance-audit.md) for known gaps.
+
+## Further documentation
+
+This README is the overview. For depth, see:
+
+| Document | Covers |
+|---|---|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | System shape, request lifecycle, core domain decisions (dispatch model, financial-field scoping, idempotency) |
+| [`API_INTEGRATION.md`](API_INTEGRATION.md) | Full endpoint reference, auth flow, feature flags, error codes, idempotency, realtime |
+| [`ENVIRONMENT.md`](ENVIRONMENT.md) | Every environment variable, feature flags, and how runtime config is validated |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Local/PM2 deployment and the automated canary CI/CD pipeline |
+| [`TESTING.md`](TESTING.md) | How to run and write Node and Kotlin tests, and what each test file covers |
+| [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Common problems and how to diagnose them |
 
 ## Contributing
 

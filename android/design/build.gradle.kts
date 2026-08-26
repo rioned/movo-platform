@@ -19,5 +19,8 @@ dependencies {
     api("androidx.compose.material:material-icons-core")
     api("androidx.compose.animation:animation")
     implementation("androidx.core:core-ktx:1.15.0")
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("org.json:json:20240303")
 }

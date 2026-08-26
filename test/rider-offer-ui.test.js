@@ -71,14 +71,19 @@ test('earnings, performance and safety reporting are first-class rider screens',
   ]);
 });
 
-test('a stationary online rider keeps reporting location and stays discoverable', () => {
+test('a stationary online rider keeps reporting location and stays discoverable, with tiered cadence (spec §13.6)', () => {
   // Regression: a displacement filter meant a rider waiting at a junction stopped
   // sending updates, went stale server-side and vanished from customer discovery.
-  source('RiderLocationService.kt', [
-    /HEARTBEAT_INTERVAL_MS/, /startHeartbeat/, /lastLocation/, /\/api\/rider\/location/
+  // Tiered tracking now does filter live fixes by distance/accuracy (to save
+  // battery while idle), but the heartbeat must force a resend of the last fix
+  // bypassing those filters, so a stationary rider never goes stale.
+  const service = source('RiderLocationService.kt', [
+    /startHeartbeat/, /lastSent/, /\/api\/rider\/location/,
+    /setMinUpdateDistanceMeters/, /EXTRA_ACTIVE_WORK/, /ACTIVE_INTERVAL_MS/, /IDLE_INTERVAL_MS/,
+    /applyTracking/, /interval_ms/, /min_distance_m/, /min_accuracy_m/
   ]);
-  const service = read('RiderLocationService.kt');
-  assert.doesNotMatch(service, /setMinUpdateDistanceMeters/, 'an online rider must report even when stationary');
+  assert.match(service, /force\s*=\s*true/, 'the heartbeat must force a resend that bypasses the distance/accuracy filters');
+  assert.match(service, /if \(!force/, 'distance/accuracy filters must be skippable by the forced heartbeat resend');
 });
 
 test('the rider map defers framing until layout instead of blocking the UI thread', () => {
@@ -93,4 +98,24 @@ test('rider credentials and queued deliveries are stored encrypted, not in plain
   ]);
   const api = read('network/RiderApi.kt');
   assert.doesNotMatch(api, /getSharedPreferences/, 'rider tokens must never fall back to plain preferences');
+});
+
+test('rider map routes rely on the shared MapService/RoutingService abstraction, not a hardcoded straight line (spec §63)', () => {
+  const map = source('RiderMap.kt', [
+    /import com\.movo\.design\.maps\.MapServices/, /import com\.movo\.design\.maps\.MapProvider/,
+    /MapServices\.routing\(MapProvider\.OSM\)/, /routePoints/
+  ]);
+  assert.doesNotMatch(map, /router\.project-osrm\.org/, 'RiderMap must go through RoutingService, not call OSRM directly');
+});
+
+test('the rider app fires the named product analytics events (spec §78)', () => {
+  source('analytics/RiderAnalytics.kt', [
+    /class RiderAnalytics/, /AnalyticsLogger/, /\/api\/analytics\/events/
+  ]);
+  source('home/RiderController.kt', [
+    /AnalyticsEvent\.RIDER_WENT_ONLINE/, /AnalyticsEvent\.RIDER_WENT_OFFLINE/,
+    /AnalyticsEvent\.OFFER_ACCEPTED/, /AnalyticsEvent\.OFFER_DECLINED/,
+    /AnalyticsEvent\.DELIVERY_COMPLETED/, /AnalyticsEvent\.RIDE_COMPLETED/
+  ]);
+  source('MainActivity.kt', [/RiderAnalytics\(api\)/]);
 });

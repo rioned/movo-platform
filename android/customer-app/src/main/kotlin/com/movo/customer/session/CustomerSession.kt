@@ -42,7 +42,6 @@ class CustomerSession(context: Context) {
             .put("quotePrice", journey.quote?.price).put("quoteDistance", journey.quote?.distanceKm)
             .put("quoteEta", journey.quote?.etaMinutes).put("deliveryId", journey.deliveryId)
             .put("creationIdempotencyKey", journey.creationIdempotencyKey)
-            .put("replacementIdempotencyKey", journey.replacementIdempotencyKey)
         // apply(), not commit(): this runs on every draft edit and an encrypted
         // synchronous write on the UI thread stutters the whole booking flow.
         preferences.edit().putString("sendJourney", json.toString()).apply()
@@ -61,7 +60,7 @@ class CustomerSession(context: Context) {
             )
             val quote = if (json.isNull("quotePrice")) null else Quote(json.getDouble("quotePrice"), json.optDouble("quoteDistance"), json.optInt("quoteEta"))
             SendJourney(draft, quote, json.optString("deliveryId").takeIf(String::isNotBlank),
-                json.getString("creationIdempotencyKey"), json.getString("replacementIdempotencyKey"))
+                json.getString("creationIdempotencyKey"))
         }.getOrNull()
     }
     fun clearJourney() = preferences.edit().remove("sendJourney").apply()

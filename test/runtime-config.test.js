@@ -26,3 +26,20 @@ test('test config defaults to an isolated database and readiness reports missing
   assert.deepEqual(evaluateReadiness(config, { database: false }), { ready: false, failures: ['database unavailable'] });
   assert.deepEqual(evaluateReadiness(config, { database: true }), { ready: true, failures: [] });
 });
+
+test('feature flags default to on except chat, and are parsed from the environment', () => {
+  const defaults = loadRuntimeConfig({ NODE_ENV: 'test' });
+  assert.deepEqual(defaults.features, {
+    paymentsEnabled: true, podPhotoEnabled: true, signatureEnabled: true,
+    chatEnabled: false, scheduledDeliveryEnabled: true
+  });
+
+  const overridden = loadRuntimeConfig({
+    NODE_ENV: 'test', PAYMENTS_ENABLED: 'false', POD_PHOTO_ENABLED: 'false',
+    SIGNATURE_ENABLED: 'false', CHAT_ENABLED: 'true', SCHEDULED_DELIVERY_ENABLED: 'false'
+  });
+  assert.deepEqual(overridden.features, {
+    paymentsEnabled: false, podPhotoEnabled: false, signatureEnabled: false,
+    chatEnabled: true, scheduledDeliveryEnabled: false
+  });
+});

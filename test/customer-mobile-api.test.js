@@ -128,7 +128,7 @@ test('delivery realtime room authorizes sender and receiver, rejects unrelated c
   const created = await request('/api/deliveries', {
     token: sender.token,
     method: 'POST',
-    body: deliveryBody({ dest_phone: receiver.phone, preferred_rider_id: assigned.id })
+    body: deliveryBody({ dest_phone: receiver.phone })
   });
   assert.equal(created.response.status, 201, created.json.error);
   const id = created.json.data.delivery.id;
@@ -202,71 +202,40 @@ test('delivery creation idempotency is actor scoped and rejects a changed body f
   assert.notEqual(otherActor.json.data.delivery.id, created.json.data.delivery.id);
 });
 
-test('ineligible selected rider is rejected without creating a delivery', async () => {
+// Rider-selection decision (spec §12): dispatch is blind and zone-based. A customer
+// or business can never pin, browse or replace a specific rider — the platform picks
+// who gets offered a delivery, not the client. These tests replace the old
+// preferred_rider_id / select-rider suite now that the feature has been removed.
+test('a client-supplied preferred_rider_id is ignored — dispatch is always blind and zone-based (spec §12)', async () => {
   const sender = await register('customer');
   const offline = await register('rider');
   setRider(offline.id, { online: 'offline' });
-  const before = db.prepare('SELECT COUNT(*) AS count FROM deliveries WHERE customer_id=?').get(sender.id).count;
-  const result = await request('/api/deliveries', {
-    token: sender.token, method: 'POST', body: deliveryBody({ preferred_rider_id: offline.id })
-  });
-  assert.equal(result.response.status, 409);
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM deliveries WHERE customer_id=?').get(sender.id).count, before);
-});
-
-test('selected dispatch offers only the chosen eligible rider and supports decline then sender reselection', async () => {
-  const sender = await register('customer');
-  const first = await register('rider');
-  const second = await register('rider');
-  setRider(first.id);
-  setRider(second.id, { lat: -1.9443, lng: 30.0621 });
+  const onlineRider = await register('rider');
+  setRider(onlineRider.id);
 
   const created = await request('/api/deliveries', {
-    token: sender.token, method: 'POST', body: deliveryBody({ preferred_rider_id: first.id })
+    token: sender.token, method: 'POST', body: deliveryBody({ preferred_rider_id: offline.id })
   });
   assert.equal(created.response.status, 201, created.json.error);
-  const delivery = created.json.data.delivery;
-  assert.equal(delivery.preferred_rider_id, first.id);
-  assert.equal(delivery.dispatch_mode, 'selected');
-  assert.equal(delivery.status, 'searching');
-  let offers = db.prepare('SELECT rider_id,status FROM delivery_offers WHERE delivery_id=? ORDER BY created_at').all(delivery.id);
-  assert.deepEqual(offers, [{ rider_id: first.id, status: 'offered' }]);
+  assert.equal(created.json.data.delivery.preferred_rider_id, null, 'a client cannot pin a specific rider via preferred_rider_id');
+  assert.equal(created.json.data.delivery.dispatch_mode, 'automatic');
+  assert.equal(created.json.data.delivery.status, 'searching');
 
-  const offer = db.prepare("SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=? AND status='offered'").get(delivery.id, first.id);
-  const declined = await request(`/api/mobile/v1/rider/offers/${offer.id}/decline`, { token: first.token, method: 'PUT' });
-  assert.equal(declined.response.status, 200, declined.json.error);
-  assert.equal(db.prepare('SELECT status FROM deliveries WHERE id=?').get(delivery.id).status, 'awaiting_rider_selection');
-
-  const selected = await request(`/api/deliveries/${delivery.id}/select-rider`, {
-    token: sender.token, method: 'PUT', body: { preferred_rider_id: second.id }
-  });
-  assert.equal(selected.response.status, 200, selected.json.error);
-  assert.equal(selected.json.data.delivery.preferred_rider_id, second.id);
-  offers = db.prepare('SELECT rider_id,status FROM delivery_offers WHERE delivery_id=? ORDER BY created_at').all(delivery.id);
-  assert.deepEqual(offers, [
-    { rider_id: first.id, status: 'declined' },
-    { rider_id: second.id, status: 'offered' }
-  ]);
+  const offeredRiderIds = db.prepare('SELECT rider_id FROM delivery_offers WHERE delivery_id=?').all(created.json.data.delivery.id).map(o => o.rider_id);
+  assert.ok(offeredRiderIds.includes(onlineRider.id), 'an eligible, actually-online rider must still be offered the delivery');
+  assert.ok(!offeredRiderIds.includes(offline.id), 'the client-requested (offline, ineligible) rider must never be offered the delivery');
 });
 
-test('persisted selected offers expire through request-time cleanup after a restart gap', async () => {
+test('there is no customer-facing endpoint to hand-pick or replace a specific rider', async () => {
   const sender = await register('customer');
   const rider = await register('rider');
   setRider(rider.id);
-  const created = await request('/api/deliveries', {
-    token: sender.token,
-    method: 'POST',
-    body: deliveryBody({ preferred_rider_id: rider.id })
-  });
+  const created = await request('/api/deliveries', { token: sender.token, method: 'POST', body: deliveryBody() });
   assert.equal(created.response.status, 201, created.json.error);
-  const deliveryId = created.json.data.delivery.id;
-  db.prepare("UPDATE delivery_offers SET expires_at=datetime('now','-1 minute') WHERE delivery_id=? AND status='offered'").run(deliveryId);
-
-  const home = await request('/api/mobile/v1/customer/home', { token: sender.token });
-  assert.equal(home.response.status, 200, home.json.error);
-  const delivery = home.json.data.activeSent.find(item => item.id === deliveryId);
-  assert.equal(delivery.status, 'awaiting_rider_selection');
-  assert.equal(db.prepare('SELECT status FROM delivery_offers WHERE delivery_id=?').get(deliveryId).status, 'expired');
+  const selectAttempt = await request(`/api/deliveries/${created.json.data.delivery.id}/select-rider`, {
+    token: sender.token, method: 'PUT', body: { preferred_rider_id: rider.id }
+  });
+  assert.equal(selectAttempt.response.status, 404);
 });
 
 test('nearby riders include only fresh approved online idle riders within radius in distance order', async () => {
@@ -291,13 +260,14 @@ test('nearby riders include only fresh approved online idle riders within radius
   setRider(invalid.id, { lat: 999, lng: 999 });
   setRider(distant.id, { lat: -2.10, lng: 30.20 });
 
+  // Dispatch is blind (spec §12): the customer-facing endpoint only reports how many
+  // eligible riders are around, never who they are, so the filtering pipeline
+  // (freshness, approval, online status, valid coordinates, radius) is verified via
+  // the count rather than by inspecting individual rider identities.
   const result = await request('/api/mobile/v1/customer/nearby-riders?lat=-1.9441&lng=30.0619&radius_km=5', { token: customer.token });
   assert.equal(result.response.status, 200, result.json.error);
-  assert.deepEqual(result.json.data.riders.map(rider => rider.id), [near.id, farther.id]);
-  assert.ok(result.json.data.riders[0].distance_km <= result.json.data.riders[1].distance_km);
-  assert.equal(result.json.data.riders[0].phone, undefined);
-  assert.equal(result.json.data.riders[0].motorcycle_color, 'Emerald');
-  assert.ok(result.json.data.riders[0].last_location_update);
+  assert.equal(result.json.data.riders, undefined);
+  assert.equal(result.json.data.rider_count, 2, 'only near and farther are approved, online, fresh, validly-located and within radius');
 });
 
 test('phone-matched receiver sees a local-format delivery while an unrelated customer cannot enumerate or open it', async () => {

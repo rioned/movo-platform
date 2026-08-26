@@ -1,7 +1,6 @@
 package com.movo.customer.send
 
 import com.movo.customer.model.Coordinate
-import com.movo.customer.model.NearbyRider
 
 sealed interface DiscoveryPhase {
     data object Locating : DiscoveryPhase
@@ -17,13 +16,18 @@ sealed interface DiscoveryPhase {
     data class Error(val message: String) : DiscoveryPhase
 }
 
+/**
+ * Dispatch is blind and zone-based (spec §12), so the customer only ever learns
+ * how many riders are around — never who they are, where exactly, or a way to
+ * pick one.
+ */
 data class DiscoverySnapshot(
     val phase: DiscoveryPhase,
     val pickup: Coordinate? = null,
-    val riders: List<NearbyRider> = emptyList()
+    val riderCount: Int = 0
 ) {
     fun canContinue(): Boolean =
-        phase == DiscoveryPhase.Available && pickup?.isFinite == true && riders.isNotEmpty()
+        phase == DiscoveryPhase.Available && pickup?.isFinite == true && riderCount > 0
 
     fun invalidateForPickup(next: Coordinate?): DiscoverySnapshot = DiscoverySnapshot(
         phase = if (next?.isFinite == true) {

@@ -2,20 +2,17 @@ package com.movo.customer.send
 
 import com.movo.customer.dataObject
 import com.movo.customer.model.Coordinate
-import com.movo.customer.model.NearbyRider
-import com.movo.customer.model.toNearbyRider
 import com.movo.customer.network.CustomerApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.json.JSONArray
-import org.json.JSONObject
 
 private const val MAX_ERROR_MESSAGE_LENGTH = 240
 
+/** Reports how many eligible riders MOVO can see near a pickup — never which ones (spec §12: blind dispatch). */
 fun interface NearbyRiderSource {
-    suspend fun scan(pickup: Coordinate): List<NearbyRider>
+    suspend fun scan(pickup: Coordinate): Int
 }
 
 /** Thrown by a [NearbyRiderSource] when the backend reports the pickup has no service zone at all. */
@@ -59,8 +56,8 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
             requestVersion
         }
 
-        val riders = try {
-            source.scan(pickup).filter { it.location.isFinite }
+        val count = try {
+            source.scan(pickup)
         } catch (error: Exception) {
             if (error is CancellationException) {
                 synchronized(stateLock) {
@@ -95,9 +92,9 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
             if (!isCurrentLocked(version, pickup)) return
             inFlightPickup = null
             mutableSnapshot.value = DiscoverySnapshot(
-                phase = if (riders.isEmpty()) DiscoveryPhase.NoRiders else DiscoveryPhase.Available,
+                phase = if (count <= 0) DiscoveryPhase.NoRiders else DiscoveryPhase.Available,
                 pickup = pickup,
-                riders = riders
+                riderCount = count.coerceAtLeast(0)
             )
         }
     }
@@ -118,43 +115,5 @@ fun customerNearbyRiderSource(api: CustomerApi, radiusKm: Int = 10): NearbyRider
         if (!data.optBoolean("in_service_area", true)) {
             throw OutOfServiceAreaException("MOVO is not currently available at this location.")
         }
-        parseNearbyRiders(data.optJSONArray("riders"))
+        data.optInt("rider_count", 0)
     }
-
-internal fun parseNearbyRiders(riders: JSONArray?): List<NearbyRider> {
-    val objects = buildList {
-        for (index in 0 until (riders?.length() ?: 0)) {
-            riders?.optJSONObject(index)?.let(::add)
-        }
-    }
-    return mapValidNearbyRiders(
-        riders = objects,
-        valueAt = { rider, name -> rider.opt(name) },
-        mapper = JSONObject::toNearbyRider
-    )
-}
-
-internal fun <T, R> mapValidNearbyRiders(
-    riders: Iterable<T>,
-    valueAt: (T, String) -> Any?,
-    mapper: (T) -> R
-): List<R> = buildList {
-    for (rider in riders) {
-        val latitude = authoritativeDouble(rider, valueAt, "latitude", "lat", "current_lat") ?: continue
-        val longitude = authoritativeDouble(rider, valueAt, "longitude", "lng", "current_lng") ?: continue
-        if (!Coordinate(latitude, longitude).isFinite) continue
-        add(mapper(rider))
-    }
-}
-
-private fun <T> authoritativeDouble(
-    rider: T,
-    valueAt: (T, String) -> Any?,
-    vararg names: String
-): Double? = names.firstNotNullOfOrNull { name ->
-    valueAt(rider, name)
-        ?.takeUnless { it == JSONObject.NULL }
-        ?.toString()
-        ?.toDoubleOrNull()
-        ?.takeIf(Double::isFinite)
-}

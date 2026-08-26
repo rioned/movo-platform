@@ -21,7 +21,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.movo.customer.R
 import com.movo.customer.model.Coordinate
-import com.movo.customer.model.NearbyRider
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.util.BoundingBox
@@ -83,7 +82,7 @@ private class PickupHaloOverlay(map: MapView, center: GeoPoint, radiusMeters: Do
 
 @Composable
 fun CustomerMap(
-    pickup: Coordinate?, destination: Coordinate?, nearbyMotorcycles: List<NearbyRider> = emptyList(),
+    pickup: Coordinate?, destination: Coordinate?,
     assignedRider: Coordinate? = null, modifier: Modifier = Modifier,
     discoveryActive: Boolean = false, showPickupHalo: Boolean = false,
     onCoordinateSelected: (Coordinate) -> Unit = {}
@@ -166,7 +165,6 @@ fun CustomerMap(
             marker(coordinate, "Pickup", pickupPin)
         }
         destination?.let { marker(it, "Destination", destinationPin) }
-        nearbyMotorcycles.filter { it.location.isFinite }.forEach { marker(it.location, "Motorcycle • ${it.name}", motorcycleIcon, Marker.ANCHOR_CENTER) }
         assignedRider?.takeIf { it.isFinite }?.let { marker(it, "Assigned rider motorcycle", motorcycleIcon, Marker.ANCHOR_CENTER) }
         map.fitToPoints(points)
         map.overlays.filterIsInstance<CopyrightOverlay>().firstOrNull()?.let { attribution ->
