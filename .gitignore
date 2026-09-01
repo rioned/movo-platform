@@ -40,3 +40,6 @@ movo.db-wal
 .superpowers/
 .playwright-cli/
 .env
+
+# Local-only admin recovery script
+scripts/reset-admin-password.js
