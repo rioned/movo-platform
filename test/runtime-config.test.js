@@ -19,6 +19,16 @@ test('production runtime configuration requires a JWT secret and parses pilot se
   assert.equal(config.providers.sms, 'sandbox');
 });
 
+test('OTP test mode (which is what makes the master 000000 OTP work) can never be enabled in production', () => {
+  assert.throws(
+    () => loadRuntimeConfig({ NODE_ENV: 'production', JWT_SECRET: 'prod-secret', OTP_TEST_MODE: 'true' }),
+    /OTP_TEST_MODE must not be enabled in production/
+  );
+  const config = loadRuntimeConfig({ NODE_ENV: 'production', JWT_SECRET: 'prod-secret' });
+  assert.equal(config.otpTestMode, false);
+  assert.deepEqual(evaluateReadiness({ ...config, otpTestMode: true, production: true }, { database: true }).failures, ['OTP test mode is enabled']);
+});
+
 test('test config defaults to an isolated database and readiness reports missing dependencies', () => {
   const config = loadRuntimeConfig({ NODE_ENV: 'test' });
   assert.match(config.dbPath, /movo-test\.db$/);

@@ -69,7 +69,7 @@ fun ActivityScreen(api: CustomerApi, onTrack: (String) -> Unit) {
         when {
             loading -> Column(verticalArrangement = Arrangement.spacedBy(MovoSpacing.small)) { repeat(3) { ShimmerCard() } }
             deliveries.isEmpty() -> EmptyState(
-                title = "No ${filter.title.lowercase()} deliveries yet",
+                title = if (filter == ActivityFilter.All) "No deliveries yet" else "No ${filter.title.lowercase()} deliveries yet",
                 message = "Deliveries you send or receive appear here with their proof of delivery and receipts."
             )
             else -> LazyColumn(

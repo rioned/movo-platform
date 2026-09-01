@@ -724,6 +724,9 @@ const DELIVERY_STATUSES = new Set([
 ]);
 
 function genOTP() { return String(crypto.randomInt(100000, 1000000)); }
+// Master test OTP for QA convenience: only ever honored when OTP_TEST_MODE=true, which
+// loadRuntimeConfig() refuses to allow when NODE_ENV=production, so this can't reach prod.
+const MASTER_TEST_OTP = '000000';
 function genOrderNo() { return 'MV' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(3).toString('hex').toUpperCase(); }
 function resOK(res, data, status=200) { res.status(status).json({ success: true, data }); }
 function resErr(res, msg, status=400, code=null) {
@@ -1241,7 +1244,8 @@ app.post('/api/auth/verify-otp', route(async (req, res) => {
   const lock = lockoutState(user);
   if (lock.locked) return resErr(res, `Too many attempts. Try again in ${lock.minutes} minute(s).`, 423, 'account_locked');
   if (!/^[0-9]{6}$/.test(otp)) return resErr(res, 'OTP must be six digits', 400, 'invalid_otp');
-  if (!runtime.otpTestMode) {
+  const isMasterTestOtp = runtime.otpTestMode && otp === MASTER_TEST_OTP;
+  if (!isMasterTestOtp) {
     if ((user.otp_attempts || 0) >= runtime.security.maxOtpAttempts) {
       db.prepare("UPDATE users SET otp_code=NULL,otp_expires=NULL,otp_attempts=0,locked_until=datetime('now', ?) WHERE id=?")
         .run(`+${runtime.security.lockoutMinutes} minutes`, user.id);
@@ -2563,7 +2567,7 @@ app.get('/api/admin/users', auth, roleAuth('admin'), route((req, res) => {
   let query = 'SELECT u.id,u.phone,u.email,u.full_name,u.role,u.status,u.created_at';
   // The rider list is the approval and dispatch queue: it must carry the vehicle
   // and availability facts operations decides on, not just the counters.
-  if (role === 'rider') query += ',r.approval_status,r.online_status,r.availability,r.avg_rating,r.rating_count,r.total_deliveries,r.total_earnings,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.last_location_update';
+  if (role === 'rider') query += ',r.approval_status,r.online_status,r.availability,r.avg_rating,r.rating_count,r.total_deliveries,r.total_earnings,r.vehicle_type,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.car_plate,r.car_make,r.car_model,r.car_color,r.last_location_update';
   if (role === 'business') query += ',b.company_name,b.tax_id,b.approval_status as biz_status';
   query += ' FROM users u';
   if (role === 'rider') query += ' LEFT JOIN riders r ON u.id=r.user_id';

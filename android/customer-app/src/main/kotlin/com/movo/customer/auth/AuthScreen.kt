@@ -108,7 +108,7 @@ fun AuthScreen(
                     if (mode == AuthMode.REGISTER) {
                         MovoField(
                             value = fullName, onValueChange = { fullName = it }, label = "Full name",
-                            enabled = !isLoading, supporting = "The name your recipients will see (full_name)",
+                            enabled = !isLoading, supporting = "The name your recipients will see",
                             leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) }
                         )
                         MovoField(

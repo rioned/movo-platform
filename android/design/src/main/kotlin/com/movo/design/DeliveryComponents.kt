@@ -102,9 +102,9 @@ fun DeliveryProgress(stage: MovoDeliveryStage, modifier: Modifier = Modifier) {
                     label,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (reached) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     textAlign = TextAlign.Center,
-                    overflow = TextOverflow.Clip
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -161,9 +161,9 @@ fun RideProgress(stage: MovoRideStage, modifier: Modifier = Modifier) {
                     label,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (reached) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     textAlign = TextAlign.Center,
-                    overflow = TextOverflow.Clip
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

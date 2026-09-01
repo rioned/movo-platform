@@ -106,7 +106,10 @@ fun RideBookingScreen(api: CustomerApi, profile: CustomerProfile, online: Boolea
 
         RideBookingStage.Destination -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                CustomerMap(pickup = pickup, destination = destination, modifier = Modifier.fillMaxSize()) { point -> destination = point }
+                CustomerMap(pickup = pickup, destination = destination, modifier = Modifier.fillMaxSize()) { point ->
+                    destination = point
+                    if (destinationAddress.isBlank()) destinationAddress = "Drop-off location"
+                }
                 Surface(
                     Modifier.align(Alignment.TopCenter).padding(MovoSpacing.default),
                     shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, shadowElevation = 6.dp
