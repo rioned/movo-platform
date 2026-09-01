@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MOVO — Deliver with Confidence</title>
+<meta name="description" content="MOVO is Rwanda's trusted digital logistics platform for same-day parcel and document delivery in Kigali, connecting customers and businesses with verified independent motorcycle riders.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #F7F8F5; color: #10201A; }
+  h1, h2, h3 { font-family: "Space Grotesk", system-ui, sans-serif; margin: 0; }
+  p, ul { margin: 0; }
+  a { color: #0A6847; text-decoration: none; }
+  a:hover { opacity: .8; }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 40px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 26px; border-radius: 999px; font-weight: 600; font-size: 15px; cursor: pointer; border: 1px solid transparent; white-space: nowrap; transition: filter .15s ease, transform .15s ease; }
+  .btn:hover { filter: brightness(1.08); transform: translateY(-1px); opacity: 1; }
+  .btn-primary { background: #0A6847; color: #fff; }
+  .btn-ghost-dark { background: transparent; color: #fff; border-color: rgba(255,255,255,.45); }
+  .btn-ghost-light { background: transparent; color: #10201A; border-color: #10201A33; }
+  .card { background: #fff; border-radius: 20px; padding: 32px; border: 1px solid #E1E5E1; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+  .grid-6 { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 24px; }
+  .stack { display: flex; flex-direction: column; }
+  .row { display: flex; flex-direction: row; }
+  .nav-link { font-size: 15px; font-weight: 500; color: #10201A; }
+  .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+  .step-line { position: relative; }
+  .step-line::after { content: ""; position: absolute; top: 23px; left: calc(50% + 30px); right: calc(-50% + 30px); height: 1px; background: #D7DBD5; }
+  .step-col:last-child .step-line::after { display: none; }
+  .step-num { width: 46px; height: 46px; border-radius: 50%; background: #0A6847; color: #fff; display: flex; align-items: center; justify-content: center; font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 17px; position: relative; z-index: 1; }
+  @media (max-width: 900px) {
+    .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-2 { grid-template-columns: minmax(0, 1fr); }
+    .grid-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .hero-row { flex-direction: column; }
+    .hero-visual { width: 100% !important; margin-top: 40px; }
+    .split-row { flex-direction: column !important; }
+    .split-row > div { width: 100% !important; }
+    .step-line::after { display: none; }
+    h1 { font-size: 40px !important; }
+  }
+  @media (max-width: 560px) {
+    .container { padding: 0 20px; }
+    .grid-4 { grid-template-columns: minmax(0,1fr); }
+    .grid-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .nav-links { display: none !important; }
+    .cta-row { flex-direction: column; align-items: stretch !important; }
+    .stat-row { flex-direction: column !important; }
+    .stat-row > div { border-bottom: 1px solid rgba(255,255,255,.15); padding-bottom: 24px !important; }
+    footer .grid-4 { gap: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<div class="container" style="position: sticky; top: 0; z-index: 20; background: rgba(247,248,245,.92); backdrop-filter: blur(8px); border-bottom: 1px solid #E1E5E1;">
+  <div class="row" style="align-items: center; justify-content: space-between; height: 84px;">
+    <div class="row" style="align-items: center; gap: 10px;">
+      <svg width="30" height="20" viewBox="0 0 64 24" fill="none" style="color: #0A6847;">
+        <circle cx="6" cy="18" r="4" fill="currentColor"/>
+        <line x1="10" y1="16" x2="26" y2="8" stroke="currentColor" stroke-width="2"/>
+        <circle cx="30" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+        <line x1="34" y1="8" x2="50" y2="16" stroke="currentColor" stroke-width="2"/>
+        <circle cx="54" cy="18" r="4" fill="currentColor"/>
+      </svg>
+      <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; letter-spacing: -.01em; color: #0B2340;">MOVO</span>
+    </div>
+    <div class="row nav-links" style="align-items: center; gap: 36px;">
+      <a class="nav-link" href="#how-it-works">How it works</a>
+      <a class="nav-link" href="#services">Services</a>
+      <a class="nav-link" href="#business">For business</a>
+      <a class="nav-link" href="#riders">For riders</a>
+    </div>
+    <a class="btn btn-primary" href="/customer/" style="padding: 11px 22px; font-size: 14px;">Request a delivery</a>
+  </div>
+</div>
+
+<!-- HERO -->
+<section style="background: #0B2340; overflow: hidden; position: relative;">
+  <div class="container" style="padding-top: 88px; padding-bottom: 96px;">
+    <div class="row hero-row" style="align-items: center; gap: 56px;">
+      <div class="stack" style="flex: 1.1; gap: 28px; min-width: 0;">
+        <div class="eyebrow" style="color: #57C08C;">Rwanda's trusted digital logistics platform</div>
+        <h1 style="color: #fff; font-size: clamp(40px, 5.2vw, 62px); line-height: 1.05; letter-spacing: -.01em;">Deliver with<br/>Confidence.</h1>
+        <p style="color: #C7D2CC; font-size: 19px; line-height: 1.6; max-width: 520px;">MOVO connects Kigali's individuals, businesses and institutions with verified independent motorcycle riders &mdash; transparent pricing, live tracking and digital proof of delivery on every same-day parcel or document.</p>
+        <div class="row cta-row" style="gap: 16px; align-items: center; margin-top: 8px;">
+          <a class="btn btn-primary" href="/customer/" style="padding: 16px 30px; font-size: 16px;">Request a delivery</a>
+          <a class="btn btn-ghost-dark" href="/rider/" style="padding: 16px 30px; font-size: 16px;">Become a rider</a>
+        </div>
+        <p style="color: #7C8B84; font-size: 14px; margin-top: 4px;">Now onboarding customers, riders and businesses for the Kigali pilot.</p>
+      </div>
+      <div class="hero-visual" style="flex: 1; min-width: 0;">
+        <svg viewBox="0 0 480 380" width="100%" height="auto" fill="none">
+          <g opacity="0.18" stroke="#8FA6C4" stroke-width="1">
+            <line x1="0" y1="60" x2="480" y2="60"/>
+            <line x1="0" y1="140" x2="480" y2="140"/>
+            <line x1="0" y1="220" x2="480" y2="220"/>
+            <line x1="0" y1="300" x2="480" y2="300"/>
+            <line x1="80" y1="0" x2="80" y2="380"/>
+            <line x1="200" y1="0" x2="200" y2="380"/>
+            <line x1="320" y1="0" x2="320" y2="380"/>
+            <line x1="420" y1="0" x2="420" y2="380"/>
+          </g>
+          <path d="M60 300 C 140 300, 150 180, 230 170 S 360 90, 430 70" stroke="#57C08C" stroke-width="3" stroke-dasharray="2 10" stroke-linecap="round"/>
+          <circle cx="60" cy="300" r="9" fill="#57C08C"/>
+          <circle cx="60" cy="300" r="16" fill="none" stroke="#57C08C" stroke-width="1.5" opacity=".5"/>
+          <circle cx="245" cy="168" r="7" fill="#fff"/>
+          <circle cx="430" cy="70" r="9" fill="#fff"/>
+          <circle cx="430" cy="70" r="17" fill="none" stroke="#fff" stroke-width="1.5" opacity=".5"/>
+          <g transform="translate(210,140)">
+            <rect x="-38" y="-24" width="76" height="30" rx="15" fill="#0F2C4E" stroke="#57C08C" stroke-width="1.5"/>
+            <text x="0" y="-3" text-anchor="middle" fill="#fff" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600">On the way</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STAT STRIP -->
+<section style="background: #F7F8F5; border-bottom: 1px solid #E1E5E1;">
+  <div class="container" style="padding: 56px 40px;">
+    <div class="row stat-row" style="gap: 24px;">
+      <div class="stack" style="flex: 1; gap: 6px;">
+        <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 34px; color: #0A6847;">1.75M</div>
+        <div style="font-size: 14px; color: #10201A; font-weight: 600;">Kigali residents</div>
+        <div style="font-size: 13px; color: #5B6B63;">2022 national census</div>
+      </div>
+      <div class="stack" style="flex: 1; gap: 6px;">
+        <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 34px; color: #0A6847;">99.7</div>
+        <div style="font-size: 14px; color: #10201A; font-weight: 600;">mobile subscriptions per 100 people</div>
+        <div style="font-size: 13px; color: #5B6B63;">RURA, July 2024</div>
+      </div>
+      <div class="stack" style="flex: 1; gap: 6px;">
+        <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 34px; color: #0A6847;">85.3%</div>
+        <div style="font-size: 14px; color: #10201A; font-weight: 600;">of adults digitally financially included</div>
+        <div style="font-size: 13px; color: #5B6B63;">FinScope Rwanda, 2024</div>
+      </div>
+      <div class="stack" style="flex: 1; gap: 6px;">
+        <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 34px; color: #0A6847;">90%+</div>
+        <div style="font-size: 14px; color: #10201A; font-weight: 600;">of Rwandan businesses are SMEs</div>
+        <div style="font-size: 13px; color: #5B6B63;">UNDP</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how-it-works" style="background: #fff;">
+  <div class="container" style="padding: 100px 40px;">
+    <div class="stack" style="gap: 14px; max-width: 640px; margin-bottom: 64px;">
+      <div class="eyebrow" style="color: #0A6847;">How it works</div>
+      <h2 style="font-size: clamp(28px, 3vw, 38px); letter-spacing: -.01em;">Six steps, one confirmed delivery.</h2>
+      <p style="font-size: 17px; color: #5B6B63; line-height: 1.6;">Every MOVO delivery follows the same standardized path &mdash; so pricing is never negotiated on the phone and status is never a guess.</p>
+    </div>
+    <div class="grid-6">
+      <div class="stack step-col step-line" style="gap: 14px;">
+        <div class="step-num">1</div>
+        <div style="font-weight: 700; font-size: 15px;">Request</div>
+        <div style="font-size: 13.5px; color: #5B6B63; line-height: 1.5;">Enter pickup, destination and item details.</div>
+      </div>
+      <div class="stack step-col step-line" style="gap: 14px;">
+        <div class="step-num">2</div>
+        <div style="font-weight: 700; font-size: 15px;">Price</div>
+        <div style="font-size: 13.5px; color: #5B6B63; line-height: 1.5;">See the exact fee before you confirm.</div>
+      </div>
+      <div class="stack step-col step-line" style="gap: 14px;">
+        <div class="step-num">3</div>
+        <div style="font-weight: 700; font-size: 15px;">Match</div>
+        <div style="font-size: 13.5px; color: #5B6B63; line-height: 1.5;">A nearby verified rider accepts the job.</div>
+      </div>
+      <div class="stack step-col step-line" style="gap: 14px;">
+        <div class="step-num">4</div>
+        <div style="font-weight: 700; font-size: 15px;">Pickup</div>
+        <div style="font-size: 13.5px; color: #5B6B63; line-height: 1.5;">Collection verified by code or photo.</div>
+      </div>
+      <div class="stack step-col step-line" style="gap: 14px;">
+        <div class="step-num">5</div>
+        <div style="font-weight: 700; font-size: 15px;">Track</div>
+        <div style="font-size: 13.5px; color: #5B6B63; line-height: 1.5;">Live location updates until arrival.</div>
+      </div>
+      <div class="stack step-col step-line" style="gap: 14px;">
+        <div class="step-num">6</div>
+        <div style="font-weight: 700; font-size: 15px;">Deliver</div>
+        <div style="font-size: 13.5px; color: #5B6B63; line-height: 1.5;">Recipient confirms &mdash; receipt generated.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CORE SERVICES -->
+<section id="services" style="background: #EAF3EE;">
+  <div class="container" style="padding: 100px 40px;">
+    <div class="stack" style="gap: 14px; max-width: 640px; margin-bottom: 56px;">
+      <div class="eyebrow" style="color: #0A6847;">Core services</div>
+      <h2 style="font-size: clamp(28px, 3vw, 38px); letter-spacing: -.01em;">Two services. One standard of care.</h2>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#0A6847" stroke-width="1.6"><rect x="4" y="8" width="16" height="12" rx="1.5"/><path d="M4 8l3-4h10l3 4"/><line x1="4" y1="12" x2="20" y2="12"/></svg>
+        <h3 style="font-size: 22px; margin-top: 20px;">Parcel delivery</h3>
+        <p style="color: #5B6B63; font-size: 15.5px; line-height: 1.6; margin-top: 12px;">Same-day movement of small and medium items across Kigali &mdash; for individuals, retailers and SMEs who can't justify a dedicated fleet.</p>
+        <ul style="margin: 20px 0 0; padding-left: 20px; color: #10201A; font-size: 14.5px; line-height: 1.9;">
+          <li>B2C retail and pharmacy fulfilment</li>
+          <li>C2C gifts, personal items and forgotten belongings</li>
+          <li>SME orders from Instagram, WhatsApp and marketplaces</li>
+        </ul>
+      </div>
+      <div class="card">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#0A6847" stroke-width="1.6"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+        <h3 style="font-size: 22px; margin-top: 20px;">Document delivery</h3>
+        <p style="color: #5B6B63; font-size: 15.5px; line-height: 1.6; margin-top: 12px;">Secure, trackable same-day movement of documents that still require physical signatures, seals or submission.</p>
+        <ul style="margin: 20px 0 0; padding-left: 20px; color: #10201A; font-size: 14.5px; line-height: 1.9;">
+          <li>Banks, insurers and law firms</li>
+          <li>Government, tenders and procurement</li>
+          <li>Universities, healthcare and corporate offices</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BUILT FOR EVERYONE -->
+<section style="background: #fff;">
+  <div class="container" style="padding: 100px 40px;">
+    <div class="stack" style="gap: 14px; max-width: 640px; margin-bottom: 56px;">
+      <div class="eyebrow" style="color: #0A6847;">Built for everyone in the chain</div>
+      <h2 style="font-size: clamp(28px, 3vw, 38px); letter-spacing: -.01em;">One platform, four kinds of trust.</h2>
+    </div>
+    <div class="grid-4">
+      <div class="stack" style="gap: 14px;">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0A6847" stroke-width="1.6"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17.5" cy="9" r="2.4"/><path d="M15 20c.3-2.5 1.9-4.2 4.4-4.2"/></svg>
+        <h3 style="font-size: 17px;">Individuals</h3>
+        <p style="font-size: 14.5px; color: #5B6B63; line-height: 1.6;">Send gifts, online purchases and forgotten items without crossing town yourself.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0A6847" stroke-width="1.6"><rect x="4" y="9" width="16" height="11" rx="1.5"/><path d="M9 9V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/><line x1="4" y1="13.5" x2="20" y2="13.5"/></svg>
+        <h3 style="font-size: 17px;">Businesses</h3>
+        <p style="font-size: 14.5px; color: #5B6B63; line-height: 1.6;">Reliable same-day fulfilment, digital records and one less coordination burden.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0A6847" stroke-width="1.6"><circle cx="7" cy="17" r="3"/><circle cx="17" cy="17" r="3"/><path d="M7 17l3-8h4l3 5"/><path d="M10 9h4"/></svg>
+        <h3 style="font-size: 17px;">Riders</h3>
+        <p style="font-size: 14.5px; color: #5B6B63; line-height: 1.6;">Structured demand, transparent jobs and earnings &mdash; without losing independence.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0A6847" stroke-width="1.6"><rect x="5" y="3" width="14" height="18" rx="1"/><line x1="9" y1="7" x2="9" y2="7.01"/><line x1="12" y1="7" x2="12" y2="7.01"/><line x1="15" y1="7" x2="15" y2="7.01"/><line x1="9" y1="11" x2="9" y2="11.01"/><line x1="12" y1="11" x2="12" y2="11.01"/><line x1="15" y1="11" x2="15" y2="11.01"/><line x1="9" y1="21" x2="9" y2="15"/><line x1="15" y1="21" x2="15" y2="15"/></svg>
+        <h3 style="font-size: 17px;">Institutions</h3>
+        <p style="font-size: 14.5px; color: #5B6B63; line-height: 1.6;">Secure document movement with an audit trail and delivery confirmation.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TRUST & SECURITY -->
+<section id="security" style="background: #0B2340;">
+  <div class="container" style="padding: 100px 40px;">
+    <div class="stack" style="gap: 14px; max-width: 640px; margin-bottom: 56px;">
+      <div class="eyebrow" style="color: #57C08C;">Built on real infrastructure</div>
+      <h2 style="font-size: clamp(28px, 3vw, 38px); letter-spacing: -.01em; color: #fff;">Trust isn't a tagline here &mdash; it's in the stack.</h2>
+    </div>
+    <div class="grid-4">
+      <div class="stack" style="gap: 14px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#57C08C" stroke-width="1.6"><path d="M12 3l7 3v6c0 4.4-3 7.5-7 9-4-1.5-7-4.6-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+        <h3 style="font-size: 16px; color: #fff;">Verified accounts</h3>
+        <p style="font-size: 14px; color: #9FB0A6; line-height: 1.6;">OTP-verified sign-up and JWT-secured sessions with role-based access for every account type.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#57C08C" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>
+        <h3 style="font-size: 16px; color: #fff;">Price shown up front</h3>
+        <p style="font-size: 14px; color: #9FB0A6; line-height: 1.6;">Zone-based pricing is calculated and displayed before any booking is confirmed.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#57C08C" stroke-width="1.6"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6" opacity=".6"/><circle cx="12" cy="12" r="9.5" opacity=".3"/></svg>
+        <h3 style="font-size: 16px; color: #fff;">Live tracking</h3>
+        <p style="font-size: 14px; color: #9FB0A6; line-height: 1.6;">Real-time rider location over an authenticated socket connection, room-scoped per delivery.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#57C08C" stroke-width="1.6"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+        <h3 style="font-size: 16px; color: #fff;">Proof of delivery</h3>
+        <p style="font-size: 14px; color: #9FB0A6; line-height: 1.6;">Verified pickup and handover codes, timestamps and coordinates, plus a digital receipt.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOR BUSINESS -->
+<section id="business" style="background: #fff;">
+  <div class="container" style="padding: 100px 40px;">
+    <div class="row split-row" style="gap: 64px; align-items: center;">
+      <div class="stack" style="flex: 1; gap: 20px;">
+        <div class="eyebrow" style="color: #0A6847;">For business</div>
+        <h2 style="font-size: clamp(26px, 3vw, 36px); letter-spacing: -.01em;">Logistics that scales with your orders, not your headcount.</h2>
+        <p style="font-size: 16px; color: #5B6B63; line-height: 1.7;">Move delivery from a manual headache into a measurable operating capability &mdash; without hiring or owning a single motorcycle.</p>
+        <ul style="margin: 8px 0 0; padding-left: 20px; color: #10201A; font-size: 15px; line-height: 2;">
+          <li>Single, multiple or bulk-uploaded delivery requests</li>
+          <li>Scheduled and recurring deliveries</li>
+          <li>Live dashboard of active, completed and failed deliveries</li>
+          <li>Digital invoices, monthly statements and proof of delivery</li>
+        </ul>
+        <a class="btn btn-primary" href="/business/" style="width: fit-content; margin-top: 8px;">Register your business</a>
+      </div>
+      <div class="stack" style="flex: 1; gap: 16px;">
+        <div class="card" style="padding: 28px;">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <span style="font-weight: 700; font-size: 15px;">Business dashboard</span>
+          </div>
+          <div class="grid-2" style="gap: 16px;">
+            <div class="stack" style="gap: 4px; background: #EAF3EE; border-radius: 12px; padding: 16px;">
+              <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 24px; color: #0A6847;">Active</span>
+              <span style="font-size: 12.5px; color: #5B6B63;">Deliveries in progress</span>
+            </div>
+            <div class="stack" style="gap: 4px; background: #EAF3EE; border-radius: 12px; padding: 16px;">
+              <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 24px; color: #0A6847;">Complete</span>
+              <span style="font-size: 12.5px; color: #5B6B63;">Proof &amp; receipts</span>
+            </div>
+          </div>
+          <div class="stack" style="gap: 10px; margin-top: 18px;">
+            <div class="row" style="justify-content: space-between; font-size: 13.5px;"><span>Downtown &mdash; Kimironko</span><span style="color: #5B6B63;">Delivered</span></div>
+            <div class="row" style="justify-content: space-between; font-size: 13.5px;"><span>Kacyiru &mdash; Remera</span><span style="color: #0A6847; font-weight: 600;">In transit</span></div>
+            <div class="row" style="justify-content: space-between; font-size: 13.5px;"><span>Nyamirambo &mdash; Kiyovu</span><span style="color: #5B6B63;">Delivered</span></div>
+          </div>
+          <p style="font-size: 12px; color: #8A968F; margin-top: 16px; font-style: italic;">Illustrative preview of the business portal.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOR RIDERS -->
+<section id="riders" style="background: #EAF3EE;">
+  <div class="container" style="padding: 100px 40px;">
+    <div class="row split-row" style="gap: 64px; align-items: center; flex-direction: row-reverse;">
+      <div class="stack" style="flex: 1; gap: 20px;">
+        <div class="eyebrow" style="color: #0A6847;">For riders</div>
+        <h2 style="font-size: clamp(26px, 3vw, 36px); letter-spacing: -.01em;">Turn your motorcycle into structured income.</h2>
+        <p style="font-size: 16px; color: #5B6B63; line-height: 1.7;">Go online when it suits you. See the job before you accept it. Get paid for every completed delivery.</p>
+        <ul style="margin: 8px 0 0; padding-left: 20px; color: #10201A; font-size: 15px; line-height: 2;">
+          <li>Countdown-timed offers with distance and earnings shown up front</li>
+          <li>Daily, weekly and monthly earnings dashboard</li>
+          <li>Document verification and a fair approval process</li>
+          <li>SOS and incident reporting built into every shift</li>
+        </ul>
+        <a class="btn btn-primary" href="/rider/" style="width: fit-content; margin-top: 8px;">Apply to ride</a>
+      </div>
+      <div class="stack" style="flex: 1; gap: 16px;">
+        <div class="card" style="padding: 28px;">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <span style="font-weight: 700; font-size: 15px;">New delivery offer</span>
+            <span style="background: #0A6847; color: #fff; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px;">0:24</span>
+          </div>
+          <div class="stack" style="gap: 8px; margin: 18px 0;">
+            <div class="row" style="justify-content: space-between; font-size: 14px;"><span style="color: #5B6B63;">Pickup</span><span>Kimironko Market</span></div>
+            <div class="row" style="justify-content: space-between; font-size: 14px;"><span style="color: #5B6B63;">Drop-off</span><span>Remera, KG 11 Ave</span></div>
+            <div class="row" style="justify-content: space-between; font-size: 14px;"><span style="color: #5B6B63;">Distance</span><span>3.2 km &middot; 11 min</span></div>
+          </div>
+          <div class="row" style="gap: 12px;">
+            <div class="btn btn-primary" style="flex: 1;">Accept</div>
+            <div class="btn btn-ghost-light" style="flex: 1;">Decline</div>
+          </div>
+          <p style="font-size: 12px; color: #8A968F; margin-top: 16px; font-style: italic;">Illustrative preview of the rider app.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section style="background: #0B2340;">
+  <div class="container" style="padding: 96px 40px; text-align: center;">
+    <div class="stack" style="align-items: center; gap: 20px; max-width: 620px; margin: 0 auto;">
+      <h2 style="font-size: clamp(28px, 3.5vw, 42px); color: #fff; letter-spacing: -.01em;">Ready to deliver with confidence?</h2>
+      <p style="font-size: 16.5px; color: #9FB0A6; line-height: 1.6;">Whichever seat you take &mdash; sender, business or rider &mdash; MOVO gives you a delivery you can trust.</p>
+      <div class="row cta-row" style="gap: 14px; margin-top: 12px; flex-wrap: wrap; justify-content: center;">
+        <a class="btn btn-primary" href="/customer/" style="padding: 15px 26px;">Request a delivery</a>
+        <a class="btn btn-ghost-dark" href="/business/" style="padding: 15px 26px;">Register your business</a>
+        <a class="btn btn-ghost-dark" href="/rider/" style="padding: 15px 26px;">Become a rider</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer style="background: #081930; padding: 72px 0 32px;">
+  <div class="container">
+    <div class="grid-4" style="margin-bottom: 56px;">
+      <div class="stack" style="gap: 16px;">
+        <div class="row" style="align-items: center; gap: 10px;">
+          <svg width="26" height="18" viewBox="0 0 64 24" fill="none" style="color: #57C08C;">
+            <circle cx="6" cy="18" r="4" fill="currentColor"/>
+            <line x1="10" y1="16" x2="26" y2="8" stroke="currentColor" stroke-width="2"/>
+            <circle cx="30" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+            <line x1="34" y1="8" x2="50" y2="16" stroke="currentColor" stroke-width="2"/>
+            <circle cx="54" cy="18" r="4" fill="currentColor"/>
+          </svg>
+          <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 19px; color: #fff;">MOVO</span>
+        </div>
+        <p style="font-size: 13.5px; color: #7C8B9C; line-height: 1.6; max-width: 220px;">Rwanda's trusted digital logistics platform. Kigali, Rwanda.</p>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <span style="font-size: 13px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: .06em;">Product</span>
+        <a href="#how-it-works" style="font-size: 14px; color: #A9B7C6;">How it works</a>
+        <a href="#services" style="font-size: 14px; color: #A9B7C6;">Services</a>
+        <a href="#security" style="font-size: 14px; color: #A9B7C6;">Security</a>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <span style="font-size: 13px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: .06em;">Portals</span>
+        <a href="/customer/login/" style="font-size: 14px; color: #A9B7C6;">Customer login</a>
+        <a href="/rider/login/" style="font-size: 14px; color: #A9B7C6;">Rider login</a>
+        <a href="/business/login/" style="font-size: 14px; color: #A9B7C6;">Business login</a>
+      </div>
+      <div class="stack" style="gap: 14px;">
+        <span style="font-size: 13px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: .06em;">Operations</span>
+        <a href="/admin/" style="font-size: 14px; color: #A9B7C6;">Admin portal</a>
+        <a href="/health" style="font-size: 14px; color: #A9B7C6;">Platform status</a>
+      </div>
+    </div>
+    <div class="row" style="border-top: 1px solid #1C3252; padding-top: 24px; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+      <span style="font-size: 13px; color: #7C8B9C;">&copy; 2026 MOVO. Kigali, Rwanda &mdash; pilot in development.</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

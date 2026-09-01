@@ -323,7 +323,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onAcceptRideOffer = { offer ->
                                 busy = true
-                                lifecycleScope.launch { controller.acceptRideOffer(offer); busy = false }
+                                lifecycleScope.launch { controller.acceptRideOffer(offer); startLocationSharingIfOnline(); busy = false }
                             },
                             onDeclineRideOffer = { offer ->
                                 busy = true

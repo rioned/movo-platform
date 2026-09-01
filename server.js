@@ -3326,35 +3326,6 @@ app.get('/metrics', (req, res) => {
   res.type('text/plain; version=0.0.4').send(metrics.render());
 });
 
-// ─── Root Redirect ───────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html><head><title>MOVO Platform</title>
-    <style>
-      *{margin:0;padding:0;box-sizing:border-box}
-      body{font-family:'Space Grotesk',sans-serif;background:#0A6847;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column}
-      h1{font-size:4rem;font-weight:700;letter-spacing:-2px;margin-bottom:.5rem}
-      p{font-size:1.2rem;opacity:.8;margin-bottom:2rem}
-      .links{display:flex;gap:1rem;flex-wrap:wrap;justify-content:center}
-      a{display:inline-flex;align-items:center;gap:.5rem;padding:.8rem 1.5rem;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:12px;color:#fff;text-decoration:none;font-weight:500;transition:all .2s}
-      a:hover{background:rgba(255,255,255,.22);transform:translateY(-2px)}
-      .tag{font-size:.7rem;background:rgba(255,255,255,.15);padding:.2rem .6rem;border-radius:20px;margin-left:.5rem}
-    </style>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    </head><body>
-    <h1>MOVO</h1>
-    <p>Ride-hailing and delivery — Maputo, Mozambique</p>
-    <div class="links">
-      <a href="/customer">Rider App</a>
-      <a href="/rider">Driver App</a>
-      <a href="/business">Business Portal</a>
-      <a href="/admin">Admin Portal</a>
-    </div>
-    </body></html>
-  `);
-});
-
 // ─── Not Found (API namespace) ───────────────────────────────
 app.use('/api', (req, res) => resErr(res, `No API route matches ${req.method} ${req.path}`, 404, 'route_not_found'));
 
