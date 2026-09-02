@@ -45,11 +45,12 @@ enum class MapProvider {
  */
 object MapTileSources {
     /**
-     * @param style A MapTiler style id (https://cloud.maptiler.com/maps/) — "streets-v2"
+     * @param style A MapTiler style id (https://cloud.maptiler.com/maps/) — "streets-v4"
      *   (default) is the closest match to Mapnik's look; use a "-dark" variant like
-     *   "dataviz-dark" for a dark-mode map.
+     *   "dataviz-v4-dark" for a dark-mode map. The "-v2" style family is retired —
+     *   MapTiler serves current tiles only under "-v4" ids.
      */
-    fun maptiler(apiKey: String, style: String = "streets-v2"): ITileSource = XYTileSource(
+    fun maptiler(apiKey: String, style: String = "streets-v4"): ITileSource = XYTileSource(
         "MapTiler-$style",
         0, 22, 256,
         ".png?key=$apiKey",
@@ -161,6 +162,54 @@ class NominatimGeocodingService(
     }
 }
 
+/**
+ * MapTiler's Cloud Geocoding API (https://api.maptiler.com/geocoding/) — used
+ * ahead of [NominatimGeocodingService] whenever a MAPTILER_API_KEY is configured,
+ * since both apps already provision that key for tile rendering (see
+ * [MapTileSources]) rather than leaning on Nominatim's shared, rate-limited public
+ * instance for every address lookup too. Falls back to [fallback] on any failure
+ * (quota, timeout, malformed response) so a flaky call degrades the map, never
+ * breaks it — the same contract as [OsrmRoutingService].
+ *
+ * Coordinates cross the API boundary as `{longitude},{latitude}` in the URL and
+ * `[longitude, latitude]` in the GeoJSON response — MapTiler/GeoJSON convention,
+ * the reverse of this file's [LatLng] field order.
+ */
+class MapTilerGeocodingService(
+    private val apiKey: String,
+    private val fallback: GeocodingService = NominatimGeocodingService(),
+    private val fetch: (URL) -> String = ::httpGet
+) : GeocodingService {
+    override suspend fun search(query: String): List<GeocodeResult> = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext emptyList()
+        runCatching {
+            val encoded = URLEncoder.encode(query, "UTF-8")
+            val url = URL("https://api.maptiler.com/geocoding/$encoded.json?key=$apiKey&limit=5")
+            parseFeatures(fetch(url))
+        }.getOrElse { fallback.search(query) }
+    }
+
+    override suspend fun reverseGeocode(point: LatLng): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = URL("https://api.maptiler.com/geocoding/${point.longitude},${point.latitude}.json?key=$apiKey")
+            parseFeatures(fetch(url)).firstOrNull()?.displayName
+        }.getOrElse { fallback.reverseGeocode(point) }
+    }
+
+    private fun parseFeatures(body: String): List<GeocodeResult> {
+        val features = JSONObject(body).getJSONArray("features")
+        return List(features.length()) { index ->
+            val feature = features.getJSONObject(index)
+            val coordinates = feature.getJSONObject("geometry").getJSONArray("coordinates")
+            GeocodeResult(
+                latitude = coordinates.getDouble(1),
+                longitude = coordinates.getDouble(0),
+                displayName = feature.optString("place_name")
+            )
+        }
+    }
+}
+
 /** Shared plain-HTTP GET used by the real routing/geocoding implementations above. */
 private fun httpGet(url: URL): String {
     val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -187,8 +236,15 @@ object MapServices {
         MapProvider.SANDBOX -> StraightLineRoutingService
     }
 
-    fun geocoding(provider: MapProvider): GeocodingService = when (provider) {
-        MapProvider.OSM -> NominatimGeocodingService()
+    /**
+     * @param maptilerApiKey When set (see each app's `BuildConfig.MAPTILER_API_KEY`),
+     *   [MapProvider.OSM] resolves to [MapTilerGeocodingService] instead of
+     *   [NominatimGeocodingService] — reusing the key the app already pays for
+     *   rather than the free public Nominatim instance.
+     */
+    fun geocoding(provider: MapProvider, maptilerApiKey: String? = null): GeocodingService = when (provider) {
+        MapProvider.OSM -> maptilerApiKey?.takeIf(String::isNotBlank)
+            ?.let(::MapTilerGeocodingService) ?: NominatimGeocodingService()
         MapProvider.SANDBOX -> SandboxGeocodingService
     }
 }

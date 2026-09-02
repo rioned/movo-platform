@@ -6,7 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import com.movo.customer.BuildConfig
 import com.movo.customer.analytics.CustomerAnalytics
 import com.movo.customer.dataObject
 import com.movo.customer.location.CustomerLocation
@@ -75,8 +76,10 @@ fun MapFirstSendScreen(
     val analytics = remember { CustomerAnalytics(api) }
     // Defaults to MapProvider.OSM, matching this app's only supported tile backend
     // today; a future MAP_PROVIDER=sandbox toggle read from the server's config
-    // would flow into this same call, not a new one (spec §63).
-    val geocodingService = remember { MapServices.geocoding(MapProvider.OSM) }
+    // would flow into this same call, not a new one (spec §63). Passing the same
+    // MAPTILER_API_KEY used for tiles (see CustomerMap) routes lookups through
+    // MapTiler's geocoding API instead of the free, rate-limited Nominatim instance.
+    val geocodingService = remember { MapServices.geocoding(MapProvider.OSM, BuildConfig.MAPTILER_API_KEY) }
     val snapshot by controller.snapshot.collectAsState()
 
     fun persist() = session.saveJourney(SendJourney(draft, quote, existingDeliveryId, creationKey))
@@ -376,7 +379,7 @@ private fun ConfirmRequestSheet(
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Confirm your delivery", style = MaterialTheme.typography.titleLarge) },
-            navigationIcon = { IconButton(onClick = onBack, enabled = !submitting) { Icon(Icons.Filled.ArrowBack, "Back to details") } },
+            navigationIcon = { IconButton(onClick = onBack, enabled = !submitting) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to details") } },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
         )
         Column(
