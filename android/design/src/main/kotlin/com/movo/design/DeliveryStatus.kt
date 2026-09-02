@@ -72,7 +72,7 @@ fun formatRwf(amount: Number?): String {
 /** Distances read naturally: metres below a kilometre, one decimal above. */
 fun formatDistance(km: Double?): String {
     if (km == null || km.isNaN()) return "—"
-    return if (km < 1) "${kotlin.math.round(km * 1000).toInt()} m" else String.format("%.1f km", km)
+    return if (km < 1) "${kotlin.math.round(km * 1000).toInt()} m" else String.format(java.util.Locale.US, "%.1f km", km)
 }
 
 /**

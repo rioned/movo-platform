@@ -9,11 +9,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -55,11 +55,11 @@ private val MotoAmber = Color(0xFFF5A623)
 
 enum class CustomerDestination(val label: String, val icon: ImageVector) {
     Ride("Ride", Icons.Filled.LocationOn),
-    Send("Send", Icons.Filled.Send),
+    Send("Send", Icons.AutoMirrored.Filled.Send),
     Receive("Receive", Icons.Filled.MailOutline),
-    Activity("Activity", Icons.Filled.List),
+    Activity("Activity", Icons.AutoMirrored.Filled.List),
     Profile("Account", Icons.Filled.Person),
-    Tracking("Tracking", Icons.Filled.Send),
+    Tracking("Tracking", Icons.AutoMirrored.Filled.Send),
     RideTracking("Ride tracking", Icons.Filled.LocationOn)
 }
 
@@ -234,7 +234,7 @@ private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: C
             }
             Box(Modifier.weight(1f)) {
                 when (destination) {
-                    CustomerDestination.Ride -> RideBookingScreen(api, profile, online, onRideCreated = ::openRideTracking)
+                    CustomerDestination.Ride -> RideBookingScreen(api, onRideCreated = ::openRideTracking)
                     CustomerDestination.Send -> SendScreen(api, profile, session, online, onTracking = ::openTracking)
                     CustomerDestination.Receive -> ReceiveScreen(api, onTrack = ::openTracking)
                     CustomerDestination.Activity -> ActivityScreen(api, onTrack = ::openTracking)

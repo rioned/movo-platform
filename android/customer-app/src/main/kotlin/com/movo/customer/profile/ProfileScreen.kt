@@ -49,8 +49,8 @@ fun ProfileScreen(
 ) {
     BackHandler(onBack = onClose)
     val scope = rememberCoroutineScope()
-    var deliveries by remember { mutableStateOf(0) }
-    var spend by remember { mutableStateOf(0.0) }
+    var deliveries by remember { mutableIntStateOf(0) }
+    var spend by remember { mutableDoubleStateOf(0.0) }
     var language by remember { mutableStateOf("en") }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }

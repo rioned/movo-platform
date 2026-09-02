@@ -92,7 +92,7 @@ fun RiderProfileScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 StatTile(if (profile.isDriver) "Rides" else "Deliveries", "${if (profile.isDriver) profile.totalRides else profile.totalDeliveries}")
                 StatTile("Earned", formatRwf(profile.totalEarnings))
-                StatTile("Rating", if (profile.ratingCount > 0) String.format("%.1f", profile.rating) else "—")
+                StatTile("Rating", if (profile.ratingCount > 0) String.format(java.util.Locale.US, "%.1f", profile.rating) else "—")
             }
         }
 

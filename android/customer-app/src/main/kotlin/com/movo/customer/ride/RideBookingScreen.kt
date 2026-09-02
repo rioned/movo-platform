@@ -23,7 +23,6 @@ import com.movo.customer.dataObject
 import com.movo.customer.location.CustomerLocation
 import com.movo.customer.map.CustomerMap
 import com.movo.customer.model.Coordinate
-import com.movo.customer.model.CustomerProfile
 import com.movo.customer.model.toRideType
 import com.movo.customer.network.CustomerApi
 import com.movo.design.*
@@ -40,7 +39,7 @@ private enum class RideBookingStage { Pickup, Destination, ChooseType }
  * the rider to pick one driver.
  */
 @Composable
-fun RideBookingScreen(api: CustomerApi, profile: CustomerProfile, online: Boolean, onRideCreated: (String) -> Unit) {
+fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
     var stage by rememberSaveable { mutableStateOf(RideBookingStage.Pickup) }
     var pickup by remember { mutableStateOf<Coordinate?>(null) }
     var pickupAddress by rememberSaveable { mutableStateOf("Current location") }

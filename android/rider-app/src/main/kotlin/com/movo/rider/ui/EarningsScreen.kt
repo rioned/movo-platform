@@ -79,7 +79,7 @@ fun EarningsScreen(
                     StatTile("Deliveries", "${stats.totalDeliveries}")
                     StatTile("Acceptance", "${stats.acceptanceRate}%")
                     StatTile("Cancellation", "${stats.cancellationRate}%")
-                    StatTile("Rating", if (stats.ratingCount > 0) String.format("%.1f", stats.rating) else "—")
+                    StatTile("Rating", if (stats.ratingCount > 0) String.format(java.util.Locale.US, "%.1f", stats.rating) else "—")
                 }
             }
             Spacer(Modifier.height(MovoSpacing.medium))
