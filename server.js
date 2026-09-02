@@ -3265,7 +3265,14 @@ app.get('/health', (req, res) => {
  * to show, without a client release for every toggle.
  */
 app.get('/api/config', (req, res) => {
-  resOK(res, { features: runtime.features, map_provider: runtime.providers.maps });
+  resOK(res, {
+    features: runtime.features,
+    map_provider: runtime.providers.maps,
+    // Client-side map key (tile requests, MapLibre/JS SDK) — MapTiler keys are
+    // designed to be used from the browser/app and restricted by domain/bundle
+    // ID in the MapTiler dashboard, not treated as a server secret.
+    maptiler_key: runtime.providers.maptilerApiKey || null
+  });
 });
 
 // ─── Analytics events (spec §78) ─────────────────────────────

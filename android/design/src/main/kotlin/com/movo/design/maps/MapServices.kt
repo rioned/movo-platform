@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import org.osmdroid.tileprovider.tilesource.ITileSource
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -31,6 +33,28 @@ enum class MapProvider {
     companion object {
         fun from(value: String?): MapProvider = if (value.equals("osm", ignoreCase = true)) OSM else SANDBOX
     }
+}
+
+/**
+ * osmdroid raster tile sources. Both apps used to render tiles via
+ * [org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK] unconditionally —
+ * the doc comment above once called that "out of scope" for [MapProvider] since no
+ * second tile backend was integrated. This is that seam: a MapTiler-hosted style,
+ * used when a MAPTILER_API_KEY is configured (see each app's `BuildConfig`),
+ * falling back to Mapnik otherwise so a build with no key still renders a map.
+ */
+object MapTileSources {
+    /**
+     * @param style A MapTiler style id (https://cloud.maptiler.com/maps/) — "streets-v2"
+     *   (default) is the closest match to Mapnik's look; use a "-dark" variant like
+     *   "dataviz-dark" for a dark-mode map.
+     */
+    fun maptiler(apiKey: String, style: String = "streets-v2"): ITileSource = XYTileSource(
+        "MapTiler-$style",
+        0, 22, 256,
+        ".png?key=$apiKey",
+        arrayOf("https://api.maptiler.com/maps/$style/256/")
+    )
 }
 
 /** A plain lat/lng pair, independent of any map SDK's own point type (e.g. osmdroid's `GeoPoint`). */

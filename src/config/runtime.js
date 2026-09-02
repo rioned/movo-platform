@@ -71,6 +71,7 @@ function loadRuntimeConfig(env = process.env) {
     },
     providers: {
       maps: env.MAP_PROVIDER || 'sandbox',
+      maptilerApiKey: env.MAPTILER_API_KEY || '',
       payment: env.PAYMENT_PROVIDER || 'sandbox',
       payout: env.PAYOUT_PROVIDER || 'sandbox',
       sms: env.SMS_PROVIDER || 'sandbox'

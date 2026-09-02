@@ -19,10 +19,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.movo.customer.BuildConfig
 import com.movo.customer.R
 import com.movo.customer.model.Coordinate
+import com.movo.design.maps.MapTileSources
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -128,7 +131,9 @@ fun CustomerMap(
     AndroidView(modifier = modifier.clipToBounds(), factory = { context ->
         Configuration.getInstance().userAgentValue = context.packageName
         MapView(context).apply {
-            mapViewState.value = this; setMultiTouchControls(true); controller.setZoom(14.0)
+            mapViewState.value = this
+            setTileSource(BuildConfig.MAPTILER_API_KEY.takeIf(String::isNotBlank)?.let(MapTileSources::maptiler) ?: TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true); controller.setZoom(14.0)
             controller.setCenter(GeoPoint(-1.9441, 30.0619)); overlays.add(CopyrightOverlay(context)); onResume()
         }
     }, update = { map ->

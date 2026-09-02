@@ -20,6 +20,9 @@ dependencies {
     api("androidx.compose.animation:animation")
     implementation("androidx.core:core-ktx:1.15.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    // MapTileSources (com.movo.design.maps) builds osmdroid tile sources; both apps
+    // already depend on osmdroid directly for MapView/GeoPoint, at the same version.
+    api("org.osmdroid:osmdroid-android:6.1.18")
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.json:json:20240303")

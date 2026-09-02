@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.movo.design.maps.LatLng
 import com.movo.design.maps.MapServices
 import com.movo.design.maps.MapProvider
+import com.movo.design.maps.MapTileSources
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
@@ -139,7 +140,7 @@ fun RiderMap(context: Context, pickupLat: Double?, pickupLng: Double?, destLat: 
     Configuration.getInstance().userAgentValue = context.packageName
     MapView(it).apply {
       mapViewState.value = this
-      setTileSource(TileSourceFactory.MAPNIK)
+      setTileSource(BuildConfig.MAPTILER_API_KEY.takeIf(String::isNotBlank)?.let(MapTileSources::maptiler) ?: TileSourceFactory.MAPNIK)
       setMultiTouchControls(true)
       overlays.add(CopyrightOverlay(context))
       onResume()
