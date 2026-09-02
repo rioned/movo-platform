@@ -583,6 +583,12 @@ const POSITIVE=['delivered','approved','resolved','active','online','ready','pai
 const mapRouteCache=new Map();
 const escapeHtml=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const emptyRow=(columns,message='No records found')=>`<tr><td colspan="${columns}" class="text-center text-gray-400 py-6">${message}</td></tr>`;
+// Riders are either car (ride-hailing) or motorcycle (delivery) drivers — vehicle_type
+// picks which set of fields (car_* vs motorcycle_*) is actually populated for this rider.
+const riderPlate=rider=>(rider.vehicle_type==='car'?rider.car_plate:rider.motorcycle_plate)||'no plate';
+const riderVehicleSummary=rider=>rider.vehicle_type==='car'
+  ? [rider.car_color,rider.car_make,rider.car_model].filter(Boolean).join(' · ')
+  : [rider.motorcycle_make,rider.motorcycle_type].filter(Boolean).join(' · ');
 // Timestamps arrive in two shapes: SQLite UTC ("2026-07-31 06:08:59", no zone)
 // and ISO strings that already carry one. Appending "Z" blindly broke the second.
 const formatDate=value=>{
@@ -642,7 +648,7 @@ async function fillReassignRiders(currentRiderId) {
   try {
     const riders = (await api('/api/admin/users?role=rider&limit=100')).filter(rider=>rider.approval_status==='approved' && rider.id!==currentRiderId);
     select.innerHTML = riders.length
-      ? `<option value="">Select a rider…</option>${riders.map(rider=>`<option value="${rider.id}">${escapeHtml(rider.full_name)} · ${escapeHtml(rider.motorcycle_plate||'no plate')} · ${escapeHtml(rider.online_status||'offline')}</option>`).join('')}`
+      ? `<option value="">Select a rider…</option>${riders.map(rider=>`<option value="${rider.id}">${escapeHtml(rider.full_name)} · ${escapeHtml(riderPlate(rider))} · ${escapeHtml(rider.online_status||'offline')}</option>`).join('')}`
       : '<option value="">No approved riders available</option>';
   } catch { select.innerHTML = '<option value="">Could not load riders</option>'; }
 }
@@ -700,7 +706,7 @@ async function loadDeliveryReceipt(id) {
 
 async function updateDeliveryStatus(id) { try { await api(`/api/admin/deliveries/${id}`,{method:'PUT',body:JSON.stringify({status:document.getElementById('delivery-status').value,note:document.getElementById('delivery-note').value.trim()})}); document.getElementById('del-modal').style.display='none'; toast('Delivery status updated'); loadAdminDeliveries(); } catch(error) { toast(error.message,true); } }
 
-async function loadRiders() { try { const search=document.getElementById('rider-search').value.trim(), approval=document.getElementById('rider-filter').value; const query=new URLSearchParams({role:'rider',limit:'100'}); if(search)query.set('search',search); const riders=await api(`/api/admin/users?${query}`); const filtered=approval?riders.filter(rider=>rider.approval_status===approval):riders; document.getElementById('rider-tbody').innerHTML=filtered.length?filtered.map(rider=>`<tr><td>${escapeHtml(rider.full_name)}</td><td>${escapeHtml(rider.phone)}</td><td>${escapeHtml(rider.motorcycle_plate||'Not provided')}<span class="block text-xs text-gray-400">${escapeHtml([rider.motorcycle_make,rider.motorcycle_type].filter(Boolean).join(' · '))}</span></td><td>${statusBadge(rider.availability||rider.online_status)}<span class="block text-xs text-gray-400">${rider.last_location_update?`GPS ${formatDate(rider.last_location_update)}`:'No GPS yet'}</span></td><td>${Number(rider.avg_rating||0).toFixed(1)}<span class="block text-xs text-gray-400">${rider.rating_count||0} ratings</span></td><td>${rider.total_deliveries||0}</td><td>${formatMoney(rider.total_earnings)}</td><td>${statusBadge(rider.approval_status)}</td><td class="space-x-1"><button class="btn-secondary btn-sm" onclick="showRiderModal('${rider.id}')">Review</button>${rider.approval_status==='pending'?`<button class="btn-primary btn-sm" onclick="setRiderStatus('${rider.id}','approve')">Approve</button>`:`<button class="btn-danger btn-sm" onclick="setRiderStatus('${rider.id}','suspend')">Suspend</button>`}</td></tr>`).join(''):emptyRow(9); } catch(error) { toast(error.message,true); } }
+async function loadRiders() { try { const search=document.getElementById('rider-search').value.trim(), approval=document.getElementById('rider-filter').value; const query=new URLSearchParams({role:'rider',limit:'100'}); if(search)query.set('search',search); const riders=await api(`/api/admin/users?${query}`); const filtered=approval?riders.filter(rider=>rider.approval_status===approval):riders; document.getElementById('rider-tbody').innerHTML=filtered.length?filtered.map(rider=>`<tr><td>${escapeHtml(rider.full_name)}</td><td>${escapeHtml(rider.phone)}</td><td>${escapeHtml(riderPlate(rider))}<span class="block text-xs text-gray-400">${escapeHtml(riderVehicleSummary(rider))}</span></td><td>${statusBadge(rider.availability||rider.online_status)}<span class="block text-xs text-gray-400">${rider.last_location_update?`GPS ${formatDate(rider.last_location_update)}`:'No GPS yet'}</span></td><td>${Number(rider.avg_rating||0).toFixed(1)}<span class="block text-xs text-gray-400">${rider.rating_count||0} ratings</span></td><td>${rider.total_deliveries||0}</td><td>${formatMoney(rider.total_earnings)}</td><td>${statusBadge(rider.approval_status)}</td><td class="space-x-1"><button class="btn-secondary btn-sm" onclick="showRiderModal('${rider.id}')">Review</button>${rider.approval_status==='pending'?`<button class="btn-primary btn-sm" onclick="setRiderStatus('${rider.id}','approve')">Approve</button>`:`<button class="btn-danger btn-sm" onclick="setRiderStatus('${rider.id}','suspend')">Suspend</button>`}</td></tr>`).join(''):emptyRow(9); } catch(error) { toast(error.message,true); } }
 const debouncedLoadRiders=debounce(loadRiders,300);
 async function setRiderStatus(id,action) { if(!confirm(`Are you sure you want to ${action} this rider?`))return; try { await api(`/api/admin/riders/${id}/approve`,{method:'PUT',body:JSON.stringify({action})}); toast(`Rider ${action}d`); document.getElementById('rider-modal').style.display='none'; loadRiders(); loadDashboard(); } catch(error) { toast(error.message,true); } }
 
@@ -724,7 +730,7 @@ async function showRiderModal(id) {
         <div><dt class="text-gray-500">Phone</dt><dd>${escapeHtml(rider.phone)}</dd></div>
         <div><dt class="text-gray-500">National ID</dt><dd>${escapeHtml(rider.national_id||'—')}</dd></div>
         <div><dt class="text-gray-500">Licence</dt><dd>${escapeHtml(rider.license_number||'—')}</dd></div>
-        <div><dt class="text-gray-500">Motorcycle</dt><dd>${escapeHtml([rider.motorcycle_color,rider.motorcycle_make,rider.motorcycle_plate].filter(Boolean).join(' · ')||'—')}</dd></div>
+        <div><dt class="text-gray-500">Vehicle</dt><dd>${escapeHtml(riderVehicleSummary(rider)||'—')} · ${escapeHtml(riderPlate(rider))}</dd></div>
         <div><dt class="text-gray-500">Deliveries</dt><dd>${rider.total_deliveries||0}</dd></div>
         <div><dt class="text-gray-500">Rating</dt><dd>${Number(rider.avg_rating||0).toFixed(1)} (${rider.rating_count||0})</dd></div>
         <div><dt class="text-gray-500">Earnings</dt><dd>${formatMoney(rider.total_earnings)}</dd></div>

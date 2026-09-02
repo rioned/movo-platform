@@ -361,7 +361,11 @@ test('the portal exposes account suspension and richer rider facts', () => {
   assert.match(portal, /function setAccountStatus/);
   assert.match(portal, /\/api\/admin\/users\/\$\{id\}\/status/);
   assert.match(portal, /Reinstate/);
-  assert.match(portal, /motorcycle_plate\|\|'Not provided'/);
+  // Riders are car (ride-hailing) or motorcycle (delivery) drivers; the rendered
+  // plate/vehicle summary must branch on vehicle_type so a car driver's own
+  // car_plate/car_make/car_model/car_color are shown, not just motorcycle_*.
+  assert.match(portal, /const riderPlate=rider=>\(rider\.vehicle_type===['"]car['"]\?rider\.car_plate:rider\.motorcycle_plate\)/);
+  assert.match(portal, /const riderVehicleSummary=rider=>rider\.vehicle_type===['"]car['"]/);
   assert.match(portal, /rider\.availability\|\|rider\.online_status/);
   // Login must be a real form so Enter submits and password managers work.
   assert.match(portal, /<form class="space-y-3" onsubmit="event\.preventDefault\(\);handleLogin\(\)"/);

@@ -53,7 +53,7 @@ test('Task 4 customer foundation has native map, location, realtime, and network
 test('Task 5 auth coordinator restores session and exposes four customer workspaces', () => {
   source('src/main/kotlin/com/movo/customer/auth/AuthScreen.kt', [
     /enum class AuthMode/, /PhoneField/, /Sign in/, /Create account/,
-    /OtpField/, /Verify/, /full_name/, /optional/i, /isLoading/
+    /OtpField/, /Verify/, /Full name/, /optional/i, /isLoading/
   ]);
   source('src/main/kotlin/com/movo/customer/profile/ProfileScreen.kt', [
     /fun ProfileScreen\(/, /Sign out/, /Connected|Reconnecting/, /BackHandler/, /Close/,
