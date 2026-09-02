@@ -71,11 +71,14 @@ function loadRuntimeConfig(env = process.env) {
     },
     providers: {
       maps: env.MAP_PROVIDER || 'sandbox',
-      maptilerApiKey: env.MAPTILER_API_KEY || '',
       payment: env.PAYMENT_PROVIDER || 'sandbox',
       payout: env.PAYOUT_PROVIDER || 'sandbox',
       sms: env.SMS_PROVIDER || 'sandbox'
     },
+    // Not a provider-mode selector (evaluateReadiness validates every config.providers
+    // value against a fixed mode allowlist), so this credential lives alongside it,
+    // not inside it.
+    maptilerApiKey: env.MAPTILER_API_KEY || '',
     dispatch: {
       offerTimeoutSeconds: positiveInteger(env.DISPATCH_OFFER_TIMEOUT_SEC, 30, 'DISPATCH_OFFER_TIMEOUT_SEC'),
       initialRadiusKm: positiveNumber(env.DISPATCH_RADIUS_KM, 5, 'DISPATCH_RADIUS_KM')
@@ -98,7 +101,7 @@ function evaluateReadiness(config, dependencies) {
   const failures = [];
   if (!dependencies.database) failures.push('database unavailable');
   for (const [name, mode] of Object.entries(config.providers)) {
-    if (!['sandbox', 'osm', 'mtn-momo', 'airtel-money', 'mpesa', 'twilio'].includes(mode)) failures.push(`unsupported ${name} provider: ${mode}`);
+    if (!['sandbox', 'osm', 'maptiler', 'mtn-momo', 'airtel-money', 'mpesa', 'twilio'].includes(mode)) failures.push(`unsupported ${name} provider: ${mode}`);
   }
   if (config.production) {
     if (config.jwtSecretGenerated) failures.push('production JWT secret was auto-generated because JWT_SECRET is unset');

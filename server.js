@@ -3275,7 +3275,7 @@ app.get('/api/config', (req, res) => {
     // Client-side map key (tile requests, MapLibre/JS SDK) — MapTiler keys are
     // designed to be used from the browser/app and restricted by domain/bundle
     // ID in the MapTiler dashboard, not treated as a server secret.
-    maptiler_key: runtime.providers.maptilerApiKey || null
+    maptiler_key: runtime.maptilerApiKey || null
   });
 });
 
