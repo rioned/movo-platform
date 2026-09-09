@@ -51,7 +51,7 @@ this pipeline intentionally has no access to:
 
 1. **Authorize the deploy key on the VPS.** SSH in and run:
    ```
-   echo 'command="/opt/movo-platform/deploy/ssh-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDuAgDyAY02hPtvSKrNKPQKUK9an5ECfxkHfWJZivOkX github-actions-movo-deploy' >> ~/.ssh/authorized_keys
+   echo 'command="/opt/movo-platform/deploy/ssh-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF8h0E+o1ejRCpw/krF6XFWS2OiZ9R4F7DHqMvqE6GqW github-actions-movo-deploy' >> ~/.ssh/authorized_keys
    ```
 2. **Add two GitHub Actions secrets** (repo Settings → Secrets and
    variables → Actions):

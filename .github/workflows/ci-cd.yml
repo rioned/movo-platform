@@ -46,12 +46,6 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          # TEMP DIAGNOSTIC (safe to log: derives only the public half, which
-          # is already published in deploy/README.md) — remove after debugging
-          # the "Permission denied (publickey,password)" deploy failure.
-          echo "key line count: $(wc -l < ~/.ssh/deploy_key)"
-          ssh-keygen -y -f ~/.ssh/deploy_key || echo "DERIVE_PUBKEY_FAILED"
-
           # The remote key is forced-command restricted (see deploy/ssh-wrapper.sh):
           # it only accepts a bare 40-char commit SHA and runs deploy.sh with it.
           # deploy.sh itself does the canary rollout, bake/monitor window, and
