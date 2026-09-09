@@ -254,7 +254,7 @@ test('MOVO map-first colors and forced-restore rescan', () => {
 test('the customer app resolves the pickup address through the shared GeocodingService abstraction (spec §63)', () => {
   source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
     /import com\.movo\.design\.maps\.MapServices/, /import com\.movo\.design\.maps\.MapProvider/,
-    /MapServices\.geocoding\(MapProvider\.OSM\)/, /reverseGeocode\(/
+    /MapServices\.geocoding\(MapProvider\.OSM/, /reverseGeocode\(/
   ]);
 });
 
