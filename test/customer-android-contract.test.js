@@ -238,7 +238,11 @@ test('the map never blocks the UI thread and the journey is never written on it'
 test('branded surfaces stay legible in dark mode', () => {
   // Regression: the fixed forest gradient with theme `onPrimary` text rendered
   // dark green on dark green when the device was in dark mode.
-  source('src/main/kotlin/com/movo/customer/auth/AuthScreen.kt', [/color = Color\.White/]);
+  source('src/main/kotlin/com/movo/customer/auth/AuthScreen.kt', [/import com\.movo\.design\.MotoHero/, /MotoHero\(/]);
+  const hero = fs.readFileSync(path.join(root, 'android/design/src/main/kotlin/com/movo/design/MotoHero.kt'), 'utf8');
+  assert.match(hero, /Text\(title, color = Color\.White/);
+  assert.match(hero, /Text\(subtitle, color = Color\(0xFFC1D2CB\)/);
+  assert.match(hero, /background\(Brush\.linearGradient\(listOf\(Color\(0xFF102C24\), Color\(0xFF081914\)/);
   source('src/main/kotlin/com/movo/customer/MainActivity.kt', [/MovoPalette\.Forest/, /color = Color\.White/]);
 });
 

@@ -8,6 +8,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -19,6 +20,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -205,17 +208,29 @@ private fun CustomerShell(profile: CustomerProfile, api: CustomerApi, session: C
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (destination != CustomerDestination.Tracking && destination != CustomerDestination.RideTracking) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+                NavigationBar(
+                    modifier = Modifier.navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(28.dp)),
+                    containerColor = MovoPalette.ForestDeep,
+                    contentColor = Color.White,
+                    tonalElevation = 0.dp,
+                    windowInsets = WindowInsets(0, 0, 0, 0)
+                ) {
                     mainDestinations.forEach { item ->
                         NavigationBarItem(
                             selected = destination == item,
                             onClick = { destination = item },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
+                            icon = {
+                                if (item == CustomerDestination.Ride) {
+                                    Icon(painterResource(R.drawable.ic_movo_motorcycle), contentDescription = null, modifier = Modifier.size(26.dp))
+                                } else Icon(item.icon, contentDescription = null)
+                            },
                             label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                                selectedIconColor = MovoPalette.ForestDeep,
+                                selectedTextColor = Color.White,
+                                unselectedIconColor = Color.White.copy(alpha = 0.65f),
+                                unselectedTextColor = Color.White.copy(alpha = 0.75f),
+                                indicatorColor = Color(0xFFD7FF63)
                             )
                         )
                     }

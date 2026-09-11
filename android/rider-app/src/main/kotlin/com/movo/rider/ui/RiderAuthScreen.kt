@@ -9,14 +9,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.movo.design.MovoBanner
+import com.movo.design.MotoHero
 import com.movo.design.MovoButton
 import com.movo.design.MovoField
 import com.movo.design.MovoPalette
@@ -63,12 +64,7 @@ fun RiderAuthScreen(
     var fullName by remember { mutableStateOf("") }
     var nationalId by remember { mutableStateOf("") }
     var licenseNumber by remember { mutableStateOf("") }
-    var vehicleType by remember { mutableStateOf("car") }
     var motorcyclePlate by remember { mutableStateOf("") }
-    var carPlate by remember { mutableStateOf("") }
-    var carMake by remember { mutableStateOf("") }
-    var carModel by remember { mutableStateOf("") }
-    var carColor by remember { mutableStateOf("") }
     var otp by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
 
@@ -76,34 +72,28 @@ fun RiderAuthScreen(
         verificationPhone?.let { phone = it; mode = RiderAuthMode.VERIFY }
     }
 
-    // Hero stays fixed; the form sheet takes the remaining height and scrolls
-    // inside itself, so the keyboard never leaves a band of empty background.
+    // The hero and form scroll together on small screens and above the keyboard.
     Column(
         Modifier.fillMaxSize().background(
             Brush.verticalGradient(listOf(MovoPalette.ForestDeep, MovoPalette.Forest))
-        ).navigationBarsPadding().imePadding()
+        ).statusBarsPadding().navigationBarsPadding().imePadding()
+            .verticalScroll(rememberScrollState())
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = MovoSpacing.xlarge, vertical = MovoSpacing.xlarge),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Fixed dark-green hero: text is explicitly light in both themes.
-            Text("MOVO Driver", style = MaterialTheme.typography.displaySmall, color = Color.White)
-            Text(
-                "Drive rides or deliver parcels, on your own schedule",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.88f)
-            )
-        }
+        MotoHero(
+            title = "Your moto. Your next move.",
+            subtitle = "MOVO RIDER / RWANDA",
+            modifier = Modifier.fillMaxWidth().padding(MovoSpacing.default),
+            compact = mode != RiderAuthMode.SIGN_IN
+        )
 
         Surface(
-            Modifier.fillMaxWidth().weight(1f),
+            Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 16.dp
         ) {
             Column(
-                Modifier.verticalScroll(rememberScrollState()).padding(MovoSpacing.xlarge),
+                Modifier.padding(MovoSpacing.xlarge),
                 verticalArrangement = Arrangement.spacedBy(MovoSpacing.medium)
             ) {
                 if (mode != RiderAuthMode.VERIFY) {
@@ -133,21 +123,8 @@ fun RiderAuthScreen(
                     MovoField(fullName, { fullName = it }, "Full legal name", enabled = !busy)
                     MovoField(nationalId, { nationalId = it }, "National ID number", enabled = !busy, supporting = "Checked during MOVO verification")
                     MovoField(licenseNumber, { licenseNumber = it }, "Driving licence number", enabled = !busy)
-                    SegmentedChoice(
-                        options = listOf(
-                            SegmentOption("car", "Drive a car", "Ride-hailing"),
-                            SegmentOption("motorcycle", "Ride a motorcycle", "Deliveries")
-                        ),
-                        selected = vehicleType, onSelect = { vehicleType = it }, enabled = !busy
-                    )
-                    if (vehicleType == "car") {
-                        MovoField(carPlate, { carPlate = it.uppercase() }, "Car plate", enabled = !busy, supporting = "For example AAB 123 MP")
-                        MovoField(carMake, { carMake = it }, "Car make (optional)", enabled = !busy)
-                        MovoField(carModel, { carModel = it }, "Car model (optional)", enabled = !busy)
-                        MovoField(carColor, { carColor = it }, "Car color (optional)", enabled = !busy)
-                    } else {
-                        MovoField(motorcyclePlate, { motorcyclePlate = it.uppercase() }, "Motorcycle plate", enabled = !busy, supporting = "For example RAB 123 C")
-                    }
+                    Text("YOUR MOTORCYCLE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    MovoField(motorcyclePlate, { motorcyclePlate = it.uppercase() }, "Motorcycle plate", enabled = !busy, supporting = "For example RAB 123 C")
                 }
 
                 if (mode == RiderAuthMode.VERIFY) {
@@ -174,9 +151,8 @@ fun RiderAuthScreen(
                         onSubmit(
                             RiderAuthRequest(
                                 mode = mode, phone = phone.trim(), password = password, fullName = fullName.trim(),
-                                nationalId = nationalId.trim(), licenseNumber = licenseNumber.trim(), vehicleType = vehicleType,
-                                motorcyclePlate = motorcyclePlate.trim(), carPlate = carPlate.trim(),
-                                carMake = carMake.trim(), carModel = carModel.trim(), carColor = carColor.trim(), otp = otp
+                                nationalId = nationalId.trim(), licenseNumber = licenseNumber.trim(), vehicleType = "motorcycle",
+                                motorcyclePlate = motorcyclePlate.trim(), otp = otp
                             )
                         )
                     },

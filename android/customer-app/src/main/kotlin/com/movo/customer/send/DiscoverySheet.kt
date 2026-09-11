@@ -63,6 +63,8 @@ fun DiscoverySheet(
     }
 
     MovoSheet {
+        Text("SEND BY MOTO", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(MovoSpacing.small))
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -96,7 +98,7 @@ fun DiscoverySheet(
 
         Spacer(Modifier.height(MovoSpacing.default))
         MovoButton(
-            text = if (snapshot.canContinue()) "Continue" else "Continue",
+            text = "Add parcel details",
             onClick = onContinue,
             enabled = snapshot.canContinue()
         )

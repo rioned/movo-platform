@@ -54,7 +54,7 @@ fun MovoButton(
         onClick = onClick,
         enabled = enabled && !loading,
         modifier = modifier.fillMaxWidth().heightIn(min = MovoSpacing.actionHeight),
-        shape = MovoShapes.medium,
+        shape = androidx.compose.foundation.shape.CircleShape,
         colors = ButtonDefaults.buttonColors(
             containerColor = container,
             contentColor = content,
@@ -86,7 +86,7 @@ fun MovoSecondaryButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.fillMaxWidth().heightIn(min = 48.dp),
-        shape = MovoShapes.medium,
+        shape = androidx.compose.foundation.shape.CircleShape,
         border = BorderStroke(1.5.dp, if (enabled) tone else MaterialTheme.colorScheme.outlineVariant),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = tone)
     ) {

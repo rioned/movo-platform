@@ -1,6 +1,5 @@
 package com.movo.customer.auth
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,10 +9,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -21,7 +17,7 @@ import androidx.compose.ui.unit.dp
 import com.movo.design.MovoBanner
 import com.movo.design.MovoButton
 import com.movo.design.MovoField
-import com.movo.design.MovoPalette
+import com.movo.design.MotoHero
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTextAction
 import com.movo.design.MovoTone
@@ -64,10 +60,14 @@ fun AuthScreen(
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding()
         ) {
-            AuthHero()
+            MotoHero(
+                title = "Your city. Your next move.",
+                subtitle = "Motorcycle rides & parcel delivery. Made for Kigali.",
+                modifier = Modifier.fillMaxWidth()
+            )
             Surface(
-                modifier = Modifier.fillMaxWidth().offset(y = (-24).dp),
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 12.dp
             ) {
@@ -87,7 +87,7 @@ fun AuthScreen(
                     Text(
                         when (mode) {
                             AuthMode.LOGIN -> "Welcome back"
-                            AuthMode.REGISTER -> "Create your customer account"
+                            AuthMode.REGISTER -> "Make your first move"
                             AuthMode.VERIFICATION -> "Verify your phone"
                         },
                         style = MaterialTheme.typography.headlineSmall,
@@ -95,8 +95,8 @@ fun AuthScreen(
                     )
                     Text(
                         when (mode) {
-                            AuthMode.LOGIN -> "Sign in with your phone number to send and track deliveries."
-                            AuthMode.REGISTER -> "We use your phone number to confirm deliveries and reach you about a parcel."
+                            AuthMode.LOGIN -> "Your next ride or delivery starts here. Sign in with your phone number."
+                            AuthMode.REGISTER -> "One account for motorcycle rides and deliveries. Start with your phone number."
                             AuthMode.VERIFICATION -> "Enter the six-digit verification code we sent by SMS."
                         },
                         style = MaterialTheme.typography.bodyMedium,
@@ -158,7 +158,7 @@ fun AuthScreen(
                     }
 
                     Text(
-                        "By continuing you agree to MOVO's delivery terms. Verified riders, transparent pricing, proof of delivery.",
+                        "Your phone number helps your rider reach you. Review your fare before you request a ride or delivery.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -166,34 +166,6 @@ fun AuthScreen(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun AuthHero() {
-    // The hero gradient is always deep forest green, in either theme, so its text
-    // is explicitly light — theme `onPrimary` would be dark green here in dark mode.
-    Box(
-        Modifier.fillMaxWidth().height(260.dp).background(
-            Brush.verticalGradient(listOf(MovoPalette.ForestDeep, MovoPalette.Forest, MovoPalette.Signal))
-        )
-    ) {
-        Column(
-            Modifier.align(Alignment.CenterStart).padding(start = MovoSpacing.xlarge, end = MovoSpacing.xlarge, bottom = MovoSpacing.section),
-            verticalArrangement = Arrangement.spacedBy(MovoSpacing.small)
-        ) {
-            Text("MOVO", style = MaterialTheme.typography.displaySmall, color = Color.White)
-            Text(
-                "Ride, or send a parcel",
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White
-            )
-            Text(
-                "On-demand rides across Maputo, plus same-day parcel and document delivery in Kigali — verified drivers and riders.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.88f)
-            )
         }
     }
 }

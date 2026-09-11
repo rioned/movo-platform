@@ -5,7 +5,10 @@ import org.json.JSONObject
 data class RideType(
     val id: String, val key: String, val name: String, val description: String?,
     val capacity: Int, val fare: Double?, val distanceKm: Double?, val estimatedMinutes: Int?, val currency: String
-)
+) {
+    // The provider category key is authoritative: never relabel car fares.
+    val isMotorcycle: Boolean get() = key.lowercase() in setOf("moto", "motorcycle")
+}
 
 data class RideDriver(
     val id: String?, val name: String, val phone: String?, val rating: Double?,

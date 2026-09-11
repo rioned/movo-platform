@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
  * text meets WCAG AA contrast on its background (spec §18: accessible contrast).
  */
 object MovoPalette {
+    val Lime = Color(0xFFD5F878)
     val Forest = Color(0xFF086B4D)
     val ForestDark = Color(0xFF054733)
     val ForestDeep = Color(0xFF03301F)
@@ -52,7 +53,7 @@ private val LightScheme = lightColorScheme(
     onPrimary = Color.White,
     primaryContainer = MovoPalette.Mint,
     onPrimaryContainer = MovoPalette.ForestDeep,
-    secondary = MovoPalette.Amber,
+    secondary = MovoPalette.Lime,
     onSecondary = MovoPalette.Ink,
     secondaryContainer = MovoPalette.AmberSoft,
     onSecondaryContainer = Color(0xFF6B4400),
@@ -74,7 +75,7 @@ private val LightScheme = lightColorScheme(
 )
 
 private val DarkScheme = darkColorScheme(
-    primary = MovoPalette.Signal,
+    primary = MovoPalette.Lime,
     onPrimary = Color(0xFF00281A),
     primaryContainer = MovoPalette.MintDark,
     onPrimaryContainer = Color(0xFFAEE9CE),

@@ -4,6 +4,9 @@ import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -13,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
+import com.movo.design.MotoHero
 import com.movo.design.MovoAvatar
 import com.movo.design.MovoBanner
 import com.movo.design.MovoButton
@@ -20,7 +25,7 @@ import com.movo.design.MovoCard
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
 import com.movo.design.StatusPill
-import com.movo.design.formatRwf
+
 import com.movo.rider.RiderMap
 import com.movo.rider.model.ActiveDelivery
 import com.movo.rider.model.ActiveRide
@@ -87,7 +92,8 @@ fun RiderHomeScreen(
         )
     }
 
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val idlePanelHeight = maxHeight * 0.58f
         RiderMap(
             activity,
             focus?.pickupLat, focus?.pickupLng,
@@ -152,7 +158,9 @@ fun RiderHomeScreen(
                     onExpired = onRideOfferExpired
                 )
 
-                else -> IdleSheet(state, busy, online, onGoOnline, onGoOffline)
+                else -> Column(Modifier.heightIn(max = idlePanelHeight).verticalScroll(rememberScrollState())) {
+                    IdleSheet(state, busy, online, onGoOnline, onGoOffline)
+                }
             }
         }
     }
@@ -166,15 +174,16 @@ private fun RiderStatusHeader(
     photo: (@Composable () -> Unit)?
 ) {
     Surface(
-        Modifier.fillMaxWidth().clickable(onClick = onOpenProfile),
-        shape = MaterialTheme.shapes.large,
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Open rider account", onClick = onOpenProfile),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 8.dp
+        shadowElevation = 3.dp
     ) {
         Row(Modifier.padding(MovoSpacing.medium), verticalAlignment = Alignment.CenterVertically) {
-            MovoAvatar(state.profile.name, size = 48.dp, online = state.profile.isOnline, photo = photo)
+            MovoAvatar(state.profile.name, size = 44.dp, online = state.profile.isOnline, photo = photo)
             Column(Modifier.weight(1f).padding(horizontal = MovoSpacing.medium)) {
-                Text(state.profile.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Text("MOVO / RIDER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(state.profile.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small), verticalAlignment = Alignment.CenterVertically) {
                     StatusPill(
                         when {
@@ -193,10 +202,7 @@ private fun RiderStatusHeader(
                     if (!online) StatusPill("No network", MovoTone.Critical)
                 }
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(formatRwf(state.profile.totalEarnings), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                Text("lifetime", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+
         }
     }
 }
@@ -208,18 +214,27 @@ private fun IdleSheet(state: RiderHomeState, busy: Boolean, online: Boolean, onG
         color = MaterialTheme.colorScheme.surface
     ) {
         if (state.profile.availability == "online") {
+            StatusPill("ONLINE • READY", MovoTone.Positive)
+            Spacer(Modifier.height(MovoSpacing.small))
             Text("Waiting for offers", style = MaterialTheme.typography.titleLarge)
             Text(
-                "You are visible to customers near you. Keep the app open so offers arrive instantly.",
+                "You are available for nearby requests. Stay safely parked while waiting.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(MovoSpacing.default))
             com.movo.design.MovoSecondaryButton("Go offline", onGoOffline, enabled = !busy)
         } else {
+            MotoHero(
+                title = "Ready for your next move?",
+                subtitle = "MOTORCYCLE / RWANDA",
+                modifier = Modifier.fillMaxWidth(),
+                compact = true
+            )
+            Spacer(Modifier.height(MovoSpacing.small))
             Text("You are offline", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (state.profile.isApproved) "Go online to start receiving ${if (state.profile.isDriver) "ride" else "delivery"} requests near you."
+                if (state.profile.isApproved) "Go online to receive nearby requests on your motorcycle."
                 else "You can go online once MOVO verifies your documents.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -231,6 +246,8 @@ private fun IdleSheet(state: RiderHomeState, busy: Boolean, online: Boolean, onG
                 enabled = state.profile.isApproved && online && !busy,
                 loading = busy
             )
+            Spacer(Modifier.height(MovoSpacing.small))
+            Text("Helmet on. Phone mounted. Ride safely.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (!online) {
                 Spacer(Modifier.height(MovoSpacing.small))
                 Text(

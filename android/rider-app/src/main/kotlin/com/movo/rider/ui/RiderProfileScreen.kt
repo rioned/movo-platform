@@ -53,13 +53,11 @@ fun RiderProfileScreen(
     var make by remember(profile.motorcycleMake) { mutableStateOf(profile.motorcycleMake) }
     var colour by remember(profile.motorcycleColor) { mutableStateOf(profile.motorcycleColor) }
     var type by remember(profile.motorcycleType) { mutableStateOf(profile.motorcycleType.ifBlank { "fuel" }) }
-    var carPlate by remember(profile.carPlate) { mutableStateOf(profile.carPlate) }
-    var carMake by remember(profile.carMake) { mutableStateOf(profile.carMake) }
-    var carModel by remember(profile.carModel) { mutableStateOf(profile.carModel) }
-    var carColor by remember(profile.carColor) { mutableStateOf(profile.carColor) }
+
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(MovoSpacing.default)) {
-        Text("Account", style = MaterialTheme.typography.headlineMedium)
+        Text("MOVO / RIDER", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Text("Your rider account", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(MovoSpacing.medium))
 
         MovoCard {
@@ -68,7 +66,7 @@ fun RiderProfileScreen(
                 Column(Modifier.padding(start = MovoSpacing.default).weight(1f)) {
                     Text(profile.name, style = MaterialTheme.typography.titleLarge)
                     Text(
-                        if (profile.isDriver) profile.carPlate.ifBlank { "Car not set" } else profile.motorcyclePlate.ifBlank { "Motorcycle not set" },
+                        profile.motorcyclePlate.ifBlank { "Add your motorcycle" },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -131,23 +129,6 @@ fun RiderProfileScreen(
         }
 
         Spacer(Modifier.height(MovoSpacing.medium))
-        if (profile.isDriver) {
-            MovoCard {
-                SectionHeader("Car")
-                MovoField(carPlate, { carPlate = it.uppercase() }, "Plate number")
-                Spacer(Modifier.height(MovoSpacing.small))
-                MovoField(carMake, { carMake = it }, "Make")
-                Spacer(Modifier.height(MovoSpacing.small))
-                MovoField(carModel, { carModel = it }, "Model")
-                Spacer(Modifier.height(MovoSpacing.small))
-                MovoField(carColor, { carColor = it }, "Colour")
-                Spacer(Modifier.height(MovoSpacing.medium))
-                MovoButton(
-                    "Save car details",
-                    { onSaveCar(profile.copy(carPlate = carPlate, carMake = carMake, carModel = carModel, carColor = carColor)) }
-                )
-            }
-        } else {
             MovoCard {
                 SectionHeader("Motorcycle")
                 MovoField(plate, { plate = it.uppercase() }, "Plate number")
@@ -167,7 +148,6 @@ fun RiderProfileScreen(
                     { onSaveMotorcycle(profile.copy(motorcyclePlate = plate, motorcycleMake = make, motorcycleColor = colour, motorcycleType = type)) }
                 )
             }
-        }
 
         Spacer(Modifier.height(MovoSpacing.medium))
         MovoCard {
@@ -181,8 +161,7 @@ fun RiderProfileScreen(
             RIDER_DOCUMENTS.chunked(2).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
                     row.forEach { (kind, label) ->
-                        val displayLabel = if (kind == "motorcycle" && profile.isDriver) "Vehicle photo" else label
-                        MovoSecondaryButton(displayLabel, { onUploadDocument(kind) }, Modifier.weight(1f))
+                        MovoSecondaryButton(label, { onUploadDocument(kind) }, Modifier.weight(1f))
                     }
                     if (row.size == 1) Spacer(Modifier.weight(1f))
                 }

@@ -8,9 +8,8 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
     kotlinOptions { jvmTarget = "21" }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
-    // Point a debug build at any MOVO server without editing this file:
-    //   ./gradlew :rider-app:installDebug -PmovoApiBaseUrl=http://10.0.2.2:3000
-    val debugApiBaseUrl = (project.findProperty("movoApiBaseUrl") as String?) ?: "https://movo-vervice.tech"
+    // Both installable variants always use the official MOVO API provider.
+    val movoApiBaseUrl = "https://movo-vervice.tech"
     // Optional MapTiler key for hosted map tiles (see MapTileSources in :design);
     // unset means the map falls back to osmdroid's default Mapnik tiles. Set it via
     // -PmaptilerApiKey=... or a maptilerApiKey= line in ~/.gradle/gradle.properties
@@ -18,30 +17,16 @@ android {
     val maptilerApiKey = (project.findProperty("maptilerApiKey") as String?) ?: ""
     buildTypes {
         debug {
-            buildConfigField("String", "API_BASE_URL", "\"$debugApiBaseUrl\"")
+            buildConfigField("String", "API_BASE_URL", "\"$movoApiBaseUrl\"")
             buildConfigField("String", "MAPTILER_API_KEY", "\"$maptilerApiKey\"")
         }
         release {
-            // A release build with no (or non-https) API base URL would silently ship with
-            // cleartext or an empty endpoint. The check itself is deferred below — buildTypes
-            // blocks configure eagerly for every variant on every invocation, so an eager
-            // error() here would fail `installDebug` too and break the LAN-debug workflow
-            // documented above.
-            val releaseApiBaseUrl = project.findProperty("movoApiBaseUrl") as String?
-            buildConfigField("String", "API_BASE_URL", "\"${releaseApiBaseUrl.orEmpty()}\"")
+            buildConfigField("String", "API_BASE_URL", "\"$movoApiBaseUrl\"")
             buildConfigField("String", "MAPTILER_API_KEY", "\"$maptilerApiKey\"")
         }
     }
 }
 
-gradle.taskGraph.whenReady {
-    if (allTasks.any { it.path.startsWith(":${project.name}:") && it.name.contains("Release") }) {
-        val releaseApiBaseUrl = project.findProperty("movoApiBaseUrl") as String?
-        if (releaseApiBaseUrl.isNullOrBlank() || !releaseApiBaseUrl.startsWith("https://")) {
-            throw GradleException("movoApiBaseUrl must be set to an https:// URL for release builds, e.g. -PmovoApiBaseUrl=https://movo-vervice.tech (got: ${releaseApiBaseUrl ?: "<unset>"})")
-        }
-    }
-}
 
 dependencies {
     implementation(project(":design"))

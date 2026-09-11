@@ -7,10 +7,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.movo.design.EmptyState
 import com.movo.design.MovoBanner
 import com.movo.design.MovoCard
+import com.movo.design.MovoPalette
 import com.movo.design.MovoSpacing
 import com.movo.design.MovoTone
 import com.movo.design.SectionHeader
@@ -38,8 +40,18 @@ fun EarningsScreen(
 ) {
     var period by remember { mutableStateOf("today") }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = MovoSpacing.default)) {
-        Text("Earnings", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(vertical = MovoSpacing.medium))
+    val currentSummary = summary?.takeIf { summary?.period == period }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(MovoSpacing.default),
+        verticalArrangement = Arrangement.spacedBy(MovoSpacing.medium)
+    ) {
+        item {
+            Text("MOVO / EARNINGS", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text("Your work, in numbers", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(vertical = MovoSpacing.small))
+            Text("A clear view of every completed delivery.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
         SegmentedChoice(
             options = listOf(
                 SegmentOption("today", "Today"),
@@ -47,56 +59,60 @@ fun EarningsScreen(
                 SegmentOption("month", "This month")
             ),
             selected = period,
-            onSelect = { period = it; onPeriodChange(it) }
+            onSelect = { period = it; onPeriodChange(it) },
+            enabled = !loading
         )
-        Spacer(Modifier.height(MovoSpacing.medium))
-        error?.let { MovoBanner(it, MovoTone.Critical); Spacer(Modifier.height(MovoSpacing.small)) }
-
-        if (loading && summary == null) {
-            ShimmerCard(); Spacer(Modifier.height(MovoSpacing.small)); ShimmerCard()
-            return@Column
         }
-
-        MovoCard(color = MaterialTheme.colorScheme.primaryContainer, elevation = 0.dp) {
-            Text("Net earnings", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        error?.let { item { MovoBanner(it, MovoTone.Critical) } }
+        if (loading) {
+            item { ShimmerCard() }
+        } else if (currentSummary != null) {
+        item {
+        MovoCard(color = MovoPalette.ForestDeep, elevation = 0.dp) {
+            Text("Net earnings / RWF", style = MaterialTheme.typography.labelMedium, color = MovoPalette.Lime)
+            Spacer(Modifier.height(MovoSpacing.small))
             Text(
-                formatRwf(summary?.total ?: 0.0),
+                formatRwf(currentSummary.total),
                 style = MaterialTheme.typography.displaySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = Color.White
             )
+            Spacer(Modifier.height(MovoSpacing.medium))
             Text(
-                "${plural(summary?.count ?: 0, "completed delivery", "completed deliveries")} • ${formatRwf(summary?.platformFees ?: 0.0)} platform fees",
+                "${plural(currentSummary.count, "completed delivery", "completed deliveries")} • ${formatRwf(currentSummary.platformFees)} platform fees",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = Color.White.copy(alpha = 0.8f)
             )
         }
-
-        Spacer(Modifier.height(MovoSpacing.medium))
+        }
+        } else if (error == null) {
+            item { EmptyState("Earnings not available yet", "Choose a period to load your delivery earnings.") }
+        }
         performance?.let { stats ->
+            item {
             MovoCard {
                 SectionHeader("Performance")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    StatTile("Deliveries", "${stats.totalDeliveries}")
-                    StatTile("Acceptance", "${stats.acceptanceRate}%")
-                    StatTile("Cancellation", "${stats.cancellationRate}%")
-                    StatTile("Rating", if (stats.ratingCount > 0) String.format(java.util.Locale.US, "%.1f", stats.rating) else "—")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                    Column(Modifier.weight(1f)) { StatTile("Deliveries", "${stats.totalDeliveries}") }
+                    Column(Modifier.weight(1f)) { StatTile("Rating", if (stats.ratingCount > 0) String.format(java.util.Locale.US, "%.1f", stats.rating) else "—") }
+                }
+                Spacer(Modifier.height(MovoSpacing.medium))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                    Column(Modifier.weight(1f)) { StatTile("Acceptance", "${stats.acceptanceRate}%") }
+                    Column(Modifier.weight(1f)) { StatTile("Cancellation", "${stats.cancellationRate}%") }
                 }
             }
-            Spacer(Modifier.height(MovoSpacing.medium))
+            }
         }
-
-        SectionHeader("Recent settlements")
-        if (summary == null || summary.entries.isEmpty()) {
+        item { SectionHeader("Recent settlements") }
+        if (!loading && currentSummary != null && currentSummary.entries.isEmpty()) {
+            item {
             EmptyState(
                 title = "No completed deliveries in this period",
-                message = "Go online to start receiving delivery offers near you."
+                message = "Completed deliveries will appear here with your earnings in RWF."
             )
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(MovoSpacing.small),
-                contentPadding = PaddingValues(bottom = MovoSpacing.section)
-            ) {
-                items(summary.entries) { entry ->
+            }
+        } else if (!loading && currentSummary != null) {
+                items(currentSummary.entries) { entry ->
                     MovoCard {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
@@ -115,7 +131,6 @@ fun EarningsScreen(
                         }
                     }
                 }
-            }
         }
     }
 }

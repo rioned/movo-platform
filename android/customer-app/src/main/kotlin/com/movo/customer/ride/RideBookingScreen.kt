@@ -2,11 +2,12 @@ package com.movo.customer.ride
 
 import android.Manifest
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
@@ -32,9 +33,8 @@ import org.json.JSONObject
 private enum class RideBookingStage { Pickup, Destination, ChooseType }
 
 /**
- * The Yango-style booking journey (spec steps 3-7): locate the rider, let them drag
- * the pin to the exact pickup point, place a destination, then show every ride
- * category with its price and ETA before confirming. Confirming starts automatic
+ * Map-first motorcycle booking: choose an exact pickup and destination, then
+ * show genuine motorcycle quotes from the provider. Confirming starts automatic
  * dispatch — the same pattern used for delivery: the app searches, it does not ask
  * the rider to pick one driver.
  */
@@ -72,6 +72,13 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
     }
     LaunchedEffect(Unit) { if (pickup == null) requestLocation() }
 
+    BackHandler(stage != RideBookingStage.Pickup) {
+        if (!loading && !confirming) {
+            error = null
+            stage = if (stage == RideBookingStage.ChooseType) RideBookingStage.Destination else RideBookingStage.Pickup
+        }
+    }
+
     if (showRationale) AlertDialog(
         onDismissRequest = { showRationale = false }, title = { Text("Use your location for pickup?") },
         text = { Text("MOVO uses your location only to set the pickup pin. You can always drag it on the map instead.") },
@@ -80,14 +87,14 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
     )
 
     when (stage) {
-        RideBookingStage.Pickup -> Column(Modifier.fillMaxSize()) {
+        RideBookingStage.Pickup -> Column(Modifier.fillMaxSize().imePadding()) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 CustomerMap(pickup = pickup, destination = null, modifier = Modifier.fillMaxSize(), showPickupHalo = true) { point -> pickup = point }
                 Surface(
                     Modifier.align(Alignment.TopCenter).padding(MovoSpacing.default),
                     shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, shadowElevation = 6.dp
                 ) {
-                    Text("Tap the map to adjust your exact pickup point", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.small))
+                    Text("01 / PICKUP  •  Tap to place your pin", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.medium))
                 }
                 FloatingActionButton(
                     onClick = ::requestLocation, modifier = Modifier.align(Alignment.BottomEnd).padding(MovoSpacing.default),
@@ -95,37 +102,42 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
                 ) { Icon(Icons.Filled.LocationOn, contentDescription = "Use my current location") }
             }
             MovoSheet {
-                Text(if (pickup?.isFinite == true) "Pickup pin placed" else "Locating…", style = MaterialTheme.typography.titleMedium)
-                MovoField(pickupAddress, { pickupAddress = it }, "Pickup label (e.g. Praça dos Trabalhadores)")
+                Text("Let's get you moving", style = MaterialTheme.typography.headlineMedium)
+                Text("A motorcycle ride, from your doorstep.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(MovoSpacing.medium))
+                MovoField(pickupAddress, { pickupAddress = it }, "Pickup landmark", supporting = "For example, Kigali Convention Centre. Tap the map to set the exact point.")
                 error?.let { MovoBanner(it, MovoTone.Warning) }
                 Spacer(Modifier.height(MovoSpacing.default))
-                MovoButton("Confirm pickup", { stage = RideBookingStage.Destination }, enabled = pickup?.isFinite == true && pickupAddress.isNotBlank())
+                MovoButton("Where to?", { error = null; stage = RideBookingStage.Destination }, enabled = pickup?.isFinite == true && pickupAddress.isNotBlank())
             }
         }
 
-        RideBookingStage.Destination -> Column(Modifier.fillMaxSize()) {
+        RideBookingStage.Destination -> Column(Modifier.fillMaxSize().imePadding()) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 CustomerMap(pickup = pickup, destination = destination, modifier = Modifier.fillMaxSize()) { point ->
-                    destination = point
-                    if (destinationAddress.isBlank()) destinationAddress = "Drop-off location"
+                    if (!loading) {
+                        destination = point
+                        if (destinationAddress.isBlank()) destinationAddress = "Drop-off location"
+                    }
                 }
                 Surface(
                     Modifier.align(Alignment.TopCenter).padding(MovoSpacing.default),
                     shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, shadowElevation = 6.dp
                 ) {
-                    Text("Tap where you're going", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.small))
+                    Text("02 / DESTINATION  •  Tap where you're going", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.medium))
                 }
             }
             MovoSheet {
-                Text(if (destination?.isFinite == true) "Destination pin placed" else "No destination yet", style = MaterialTheme.typography.titleMedium)
-                MovoField(destinationAddress, { destinationAddress = it }, "Destination (type or describe where you're going)")
+                Text("Where are you headed?", style = MaterialTheme.typography.headlineSmall)
+                Text("From $pickupAddress", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(MovoSpacing.medium))
+                MovoField(destinationAddress, { destinationAddress = it }, "Destination landmark", supporting = "Place a destination pin on the map, then add a landmark.", enabled = !loading)
                 Spacer(Modifier.height(MovoSpacing.default))
                 MovoButton(
-                    "Find ride options", {
+                    "See motorcycle fare", {
                         loading = true; error = null
                         scope.launch {
                             runCatching {
-                                api.get("/api/ride-types").dataObject()
                                 val p = pickup!!; val d = destination!!
                                 val estimate = api.post(
                                     "/api/rides/estimate",
@@ -134,42 +146,55 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
                                 ).dataObject()
                                 val estimates = estimate.getJSONArray("estimates")
                                 List(estimates.length()) { estimates.getJSONObject(it).toRideType() }
+                                    .filter { it.isMotorcycle }
+                                    .filter { it.id.isNotBlank() }
                             }.onSuccess { types ->
                                 rideTypes = types
-                                selectedRideTypeId = types.firstOrNull { it.key == "standard" }?.id ?: types.firstOrNull()?.id
+                                selectedRideTypeId = types.firstOrNull()?.id
                                 analytics.log(AnalyticsEvent.QUOTE_VIEWED, mapOf("ride_type_count" to types.size.toString()))
                                 stage = RideBookingStage.ChooseType
                             }.onFailure { error = it.message }
                             loading = false
                         }
                     },
-                    enabled = destination?.isFinite == true && destinationAddress.isNotBlank() && !loading
+                    enabled = destination?.isFinite == true && destinationAddress.isNotBlank() && !loading,
+                    loading = loading
                 )
                 error?.let { MovoBanner(it, MovoTone.Critical) }
-                MovoTextAction("Back", { stage = RideBookingStage.Pickup }, Modifier.fillMaxWidth())
+                MovoTextAction("Change pickup", { error = null; stage = RideBookingStage.Pickup }, Modifier.fillMaxWidth(), enabled = !loading)
             }
         }
 
-        RideBookingStage.ChooseType -> Column(Modifier.fillMaxSize().padding(MovoSpacing.default)) {
-            Text("Choose a ride", style = MaterialTheme.typography.headlineSmall)
-            Text("Every category shows its price and arrival time up front.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        RideBookingStage.ChooseType -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(MovoSpacing.default)) {
+            MotoHero(title = "Small ride. Big city.", subtitle = "03 / REVIEW YOUR MOTORCYCLE RIDE", compact = true)
             Spacer(Modifier.height(MovoSpacing.default))
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
-                items(rideTypes) { type ->
+            MovoCard {
+                Text("YOUR ROUTE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(MovoSpacing.small))
+                Text(pickupAddress, style = MaterialTheme.typography.titleMedium)
+                Text("↓", color = MaterialTheme.colorScheme.primary)
+                Text(destinationAddress, style = MaterialTheme.typography.titleMedium)
+            }
+            Spacer(Modifier.height(MovoSpacing.default))
+            if (rideTypes.isEmpty()) {
+                MovoBanner("Motorcycle rides unavailable. The provider has no motorcycle fare for this route right now. Try again later or change your route.", MovoTone.Warning)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                rideTypes.forEach { type ->
                     val selected = type.id == selectedRideTypeId
                     MovoCard(
-                        modifier = Modifier.fillMaxWidth().selectable(selected = selected, onClick = { selectedRideTypeId = type.id }),
+                        modifier = Modifier.fillMaxWidth().selectable(selected = selected, enabled = !confirming, onClick = { selectedRideTypeId = type.id }),
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
                     ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
+                            Column(Modifier.weight(1f)) {
                                 Text(type.name, style = MaterialTheme.typography.titleMedium)
                                 type.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                                Text("${type.capacity} seats", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Motorcycle", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(formatMoney(type.fare, type.currency), style = MaterialTheme.typography.titleLarge)
-                                Text("~${formatMinutes(type.estimatedMinutes)} away", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${formatMinutes(type.estimatedMinutes)} trip", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -178,14 +203,14 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
             Spacer(Modifier.height(MovoSpacing.default))
             Text("Payment", style = MaterialTheme.typography.labelMedium)
             SegmentedChoice(
-                options = listOf(SegmentOption("cash", "Cash"), SegmentOption("mpesa", "M-Pesa"), SegmentOption("card", "Card")),
-                selected = paymentMethod, onSelect = { paymentMethod = it }
+                options = listOf(SegmentOption("cash", "Cash"), SegmentOption("card", "Card")),
+                selected = paymentMethod, onSelect = { paymentMethod = it }, enabled = !confirming && rideTypes.isNotEmpty()
             )
             error?.let { MovoBanner(it, MovoTone.Critical) }
             Spacer(Modifier.height(MovoSpacing.default))
             MovoButton(
-                if (confirming) "Confirming…" else "Confirm ride", {
-                    val rideTypeId = selectedRideTypeId ?: return@MovoButton
+                if (confirming) "Requesting your moto…" else "Request motorcycle", {
+                    val selectedType = rideTypes.firstOrNull { it.id == selectedRideTypeId && it.isMotorcycle } ?: return@MovoButton
                     val p = pickup ?: return@MovoButton
                     val d = destination ?: return@MovoButton
                     confirming = true; error = null
@@ -195,7 +220,7 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
                                 "/api/rides",
                                 JSONObject().put("pickup_address", pickupAddress).put("pickup_lat", p.latitude).put("pickup_lng", p.longitude)
                                     .put("dest_address", destinationAddress).put("dest_lat", d.latitude).put("dest_lng", d.longitude)
-                                    .put("ride_type_id", rideTypeId).put("payment_method", paymentMethod)
+                                    .put("ride_type_id", selectedType.id).put("payment_method", paymentMethod)
                             ).dataObject().getJSONObject("ride").getString("id")
                         }.onSuccess { id ->
                             confirming = false
@@ -204,9 +229,10 @@ fun RideBookingScreen(api: CustomerApi, onRideCreated: (String) -> Unit) {
                         }.onFailure { error = it.message; confirming = false }
                     }
                 },
-                enabled = !confirming && !loading && selectedRideTypeId != null
+                enabled = !confirming && !loading && rideTypes.any { it.id == selectedRideTypeId && it.isMotorcycle },
+                loading = confirming
             )
-            MovoTextAction("Back", { stage = RideBookingStage.Destination }, Modifier.fillMaxWidth())
+            MovoTextAction("Change route", { error = null; stage = RideBookingStage.Destination }, Modifier.fillMaxWidth(), enabled = !confirming)
         }
     }
 }

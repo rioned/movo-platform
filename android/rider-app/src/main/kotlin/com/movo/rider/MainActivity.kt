@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,8 +44,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 private enum class RiderTab(val label: String, val icon: ImageVector) {
-    Home("Home", Icons.Filled.Home),
-    Earnings("Earnings", Icons.Filled.List),
+    Home("Map", Icons.Filled.Home),
+    Earnings("Earnings", Icons.AutoMirrored.Filled.List),
     Safety("Safety", Icons.Filled.Warning),
     Account("Account", Icons.Filled.AccountCircle)
 }
@@ -263,7 +263,7 @@ class MainActivity : ComponentActivity() {
             snackbarHost = { SnackbarHost(snackbarHost) },
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     RiderTab.entries.forEach { item ->
                         NavigationBarItem(
                             selected = tab == item,

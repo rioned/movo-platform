@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -29,6 +30,7 @@ import com.movo.design.maps.MapProvider
 import com.movo.design.maps.MapServices
 import com.movo.design.MovoBanner
 import com.movo.design.MovoButton
+import com.movo.design.MovoPalette
 import com.movo.design.MovoSpacing
 import com.movo.design.PriceSummary
 import com.movo.design.StatusPill
@@ -160,20 +162,19 @@ fun MapFirstSendScreen(
                         horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, shadowElevation = 6.dp) {
-                            Text(
-                                "Send a parcel or document",
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.small)
-                            )
+                        Surface(modifier = Modifier.weight(1f), shape = MaterialTheme.shapes.large, color = MovoPalette.ForestDeep, shadowElevation = 6.dp) {
+                            Column(Modifier.padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.medium)) {
+                                Text("You send. We move.", style = MaterialTheme.typography.titleLarge, color = Color.White)
+                                Text("Parcels & documents • Kigali", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.8f))
+                            }
                         }
                         if (!online) StatusPill("Offline", MovoTone.Warning)
                     }
                     FloatingActionButton(
                         onClick = ::requestLocation,
                         modifier = Modifier.align(Alignment.BottomEnd).padding(MovoSpacing.default),
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = MaterialTheme.colorScheme.primary
+                        containerColor = Color(0xFFD7FF63),
+                        contentColor = MovoPalette.ForestDeep
                     ) { Icon(Icons.Filled.LocationOn, contentDescription = "Use my current location") }
                 }
                 DiscoverySheet(
