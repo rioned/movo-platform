@@ -32,11 +32,12 @@ test('booking offers only provider motorcycle quotes and fails closed without th
 });
 
 test('customer navigation and delivery discovery carry the moto identity without bypassing live gates', () => {
-  const shell = source('MainActivity.kt');
-  assert.ok(shell.includes('painterResource(R.drawable.ic_movo_motorcycle)'));
-  assert.ok(shell.includes('RoundedCornerShape(28.dp)'));
-  assert.ok(shell.includes('indicatorColor = Color(0xFFD7FF63)'));
-  for (const destination of ['Ride', 'Send', 'Receive', 'Activity', 'Profile']) assert.ok(shell.includes(`CustomerDestination.${destination}`));
+  const shell = source('parcel/ParcelApp.kt');
+  assert.ok(source('MainActivity.kt').includes('ParcelApp('));
+  assert.ok(source('parcel/delivery/BookingScreens.kt').includes('TwoWheeler'));
+  assert.ok(source('parcel/ui/ParcelTheme.kt').includes('MovoGreen'));
+  for (const destination of ['home', 'pickup', 'orders', 'profile', 'tracking']) assert.ok(shell.includes(`"${destination}"`));
+  assert.doesNotMatch(shell, /RideBookingScreen|RideTrackingScreen/);
   const send = source('send/MapFirstSendScreen.kt');
   assert.ok(send.includes('Parcels & documents • Kigali'));
   assert.ok(send.includes('api.post("/api/deliveries", body, creationKey)'));

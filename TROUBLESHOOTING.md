@@ -78,7 +78,7 @@ verification.
 
 **A request you're sure should work returns 401/403** — check three things
 in order: (1) is the `Authorization: Bearer <token>` header actually present
-and not expired (`JWT_EXPIRY`, default `7d`)? (2) does the route have a
+and not expired (`JWT_EXPIRY`, default `180d`)? (2) does the route have a
 `roleAuth('customer', ...)` restricting it to roles you're not in? (3) is
 there a `requireFeature(...)` gate — check `GET /api/config` for whether the
 relevant flag is off (see [`ENVIRONMENT.md`](ENVIRONMENT.md#feature-flags)).

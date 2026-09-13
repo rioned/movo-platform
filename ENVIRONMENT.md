@@ -14,7 +14,7 @@ production. Copy [`.env.example`](.env.example) to `.env` to get started.
 | `NODE_ENV` | `development` | `production` enforces the production-only checks below; `test` is what the test suite sets |
 | `PORT` | `3000` | HTTP and Socket.IO listening port |
 | `JWT_SECRET` | random per-boot in dev/test | **Required** in production — the process refuses to start without it. There's deliberately no hardcoded fallback secret: a value checked into the repo would let anyone with repo access forge tokens for any user if a deployment ever forgot to set this. Without it in dev/test you get a random secret that doesn't survive a restart. |
-| `JWT_EXPIRY` | `7d` | Access-token lifetime |
+| `JWT_EXPIRY` | `180d` | Access-token lifetime |
 | `DB_PATH` | `./movo.db` (`./movo-test.db` under `NODE_ENV=test`) | SQLite file path |
 | `ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated CORS allowlist |
 | `OTP_TEST_MODE` | `false` | Returns the OTP in the API response instead of sending SMS. **Refused at startup if `NODE_ENV=production`** — this is a test-only escape hatch, never a production toggle. |
@@ -72,6 +72,13 @@ production. Copy [`.env.example`](.env.example) to `.env` to get started.
 `GET /ready` fails if any provider is set to a value outside this list —
 that's the config-validation half of readiness, independent of whether the
 provider is actually reachable.
+
+## Location suggestions
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PLACES_PROVIDER` | `osm` | `sandbox` (no suggestions, CI/offline), `osm` (Nominatim/MapTiler only — free/cheap, no Google spend), `hybrid` (adds Google Places on top when `GOOGLE_PLACES_API_KEY` is set, for richer named-business/landmark matches). Not part of the `evaluateReadiness` provider allowlist above — an unrecognized value just falls back to OSM-only behavior. See `src/services/geocoding.js` and `GET /api/places/search`. |
+| `GOOGLE_PLACES_API_KEY` | *(empty)* | Only used when `PLACES_PROVIDER=hybrid`. Get one at https://console.cloud.google.com/google/maps-apis — restrict it to the Places API and your server's IP/domain. |
 
 ## Dispatch tuning
 

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,6 +48,7 @@ fun MotoHero(title: String, subtitle: String, modifier: Modifier = Modifier, com
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp))
             .background(Brush.linearGradient(listOf(Color(0xFF102C24), Color(0xFF081914))))
+            .border(1.dp, Color(0xFF55826B).copy(alpha = 0.45f), RoundedCornerShape(28.dp))
             .padding(if (compact) 16.dp else 22.dp)
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -56,7 +58,20 @@ fun MotoHero(title: String, subtitle: String, modifier: Modifier = Modifier, com
         if (!compact) {
             Box(Modifier.fillMaxWidth().height(164.dp), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxSize()) {
-                    // A quiet route halo and a grounding shadow, not a fake live map.
+                    // A softly lit display plinth, not a fake live map or impact metric.
+                    drawCircle(
+                        Brush.radialGradient(listOf(Color(0xFF9BEBA8).copy(alpha = .18f), Color.Transparent),
+                            center = Offset(size.width * .55f, size.height * .44f), radius = size.width * .5f),
+                        radius = size.width * .5f, center = Offset(size.width * .55f, size.height * .44f)
+                    )
+                    for (index in 0..8) {
+                        val x = size.width * index / 8f
+                        drawLine(Color(0xFFD5F878).copy(alpha = .045f), Offset(x, size.height * .38f), Offset(x - size.width * .25f, size.height), 1.dp.toPx())
+                    }
+                    drawOval(Brush.verticalGradient(listOf(Color(0xFF49785D), Color(0xFF142D24))),
+                        Offset(size.width * .09f, size.height * .69f), Size(size.width * .82f, size.height * .26f))
+                    drawOval(Color(0xFF92C7A0).copy(alpha = .32f), Offset(size.width * .09f, size.height * .69f),
+                        Size(size.width * .82f, size.height * .21f), style = Stroke(1.dp.toPx()))
                     drawOval(Color(0xFF26463A), Offset(size.width * .1f, size.height * .28f), Size(size.width * .8f, size.height * .66f), style = Stroke(1.dp.toPx()))
                     drawOval(Color.Black.copy(alpha = .32f), Offset(size.width * .19f, size.height * .81f), Size(size.width * .64f, size.height * .13f))
                 }

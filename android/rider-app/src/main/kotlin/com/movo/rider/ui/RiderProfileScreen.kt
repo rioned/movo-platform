@@ -55,12 +55,14 @@ fun RiderProfileScreen(
     var type by remember(profile.motorcycleType) { mutableStateOf(profile.motorcycleType.ifBlank { "fuel" }) }
 
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(MovoSpacing.default)) {
+    Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(MovoSpacing.default)) {
         Text("MOVO / RIDER", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         Text("Your rider account", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(MovoSpacing.small))
+        Text("Your identity. Your motorcycle. Your next move.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(MovoSpacing.medium))
 
-        MovoCard {
+        MovoCard(color = MaterialTheme.colorScheme.surfaceVariant, elevation = 6.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 MovoAvatar(profile.name, size = 64.dp, online = profile.isOnline, photo = photo)
                 Column(Modifier.padding(start = MovoSpacing.default).weight(1f)) {
@@ -87,10 +89,12 @@ fun RiderProfileScreen(
                 }
             }
             Spacer(Modifier.height(MovoSpacing.medium))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                StatTile(if (profile.isDriver) "Rides" else "Deliveries", "${if (profile.isDriver) profile.totalRides else profile.totalDeliveries}")
-                StatTile("Earned", formatRwf(profile.totalEarnings))
-                StatTile("Rating", if (profile.ratingCount > 0) String.format(java.util.Locale.US, "%.1f", profile.rating) else "—")
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(MovoSpacing.small))
+            StatTile("Earned", formatRwf(profile.totalEarnings), Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                StatTile(if (profile.isDriver) "Rides" else "Deliveries", "${if (profile.isDriver) profile.totalRides else profile.totalDeliveries}", Modifier.weight(1f))
+                StatTile("Rating", if (profile.ratingCount > 0) String.format(java.util.Locale.US, "%.1f", profile.rating) else "—", Modifier.weight(1f))
             }
         }
 
@@ -158,13 +162,8 @@ fun RiderProfileScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(MovoSpacing.small))
-            RIDER_DOCUMENTS.chunked(2).forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
-                    row.forEach { (kind, label) ->
-                        MovoSecondaryButton(label, { onUploadDocument(kind) }, Modifier.weight(1f))
-                    }
-                    if (row.size == 1) Spacer(Modifier.weight(1f))
-                }
+            RIDER_DOCUMENTS.forEach { (kind, label) ->
+                MovoSecondaryButton(label, { onUploadDocument(kind) }, Modifier.fillMaxWidth())
                 Spacer(Modifier.height(MovoSpacing.small))
             }
         }

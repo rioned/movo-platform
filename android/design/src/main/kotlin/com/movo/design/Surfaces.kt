@@ -1,6 +1,7 @@
 package com.movo.design
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +23,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Standard content card: one elevation, one radius, used everywhere. */
+/** Raised carbon-series surface; a fine rim keeps depth visible in dark mode. */
 @Composable
 fun MovoCard(
     modifier: Modifier = Modifier,
@@ -34,8 +36,15 @@ fun MovoCard(
     elevation: androidx.compose.ui.unit.Dp = 2.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Surface(modifier = modifier.fillMaxWidth(), shape = MovoShapes.large, color = color, shadowElevation = elevation) {
-        Column(Modifier.padding(contentPadding), content = content)
+    Surface(
+        modifier = modifier.fillMaxWidth(), shape = MovoShapes.large, color = color,
+        shadowElevation = elevation,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+    ) {
+        Column(
+            Modifier.background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.035f), Color.Transparent)))
+                .padding(contentPadding), content = content
+        )
     }
 }
 
@@ -56,7 +65,8 @@ fun MovoSheet(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(topStart = MovoSpacing.sheetCorner, topEnd = MovoSpacing.sheetCorner),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 16.dp
+        shadowElevation = 16.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
     ) {
         Column(Modifier.padding(contentPadding)) {
             if (showHandle) {

@@ -24,7 +24,7 @@ release builds must use an HTTPS URL (see [`DEPLOYMENT.md`](DEPLOYMENT.md)).
 3. `POST /api/auth/login` — phone + password (or SMS OTP for supported phone
    prefixes) for a returning user.
 4. Send the JWT as `Authorization: Bearer <token>` on every subsequent
-   request. Tokens expire after `JWT_EXPIRY` (default `7d`).
+   request. Tokens expire after `JWT_EXPIRY` (default `180d`).
 5. `GET /api/auth/me` — resolve the current session.
 
 `OTP_TEST_MODE=true` (never in production — `runtime.js` refuses to boot with
@@ -50,7 +50,8 @@ before login:
     "chatEnabled": false,
     "scheduledDeliveryEnabled": true
   },
-  "map_provider": "osm"
+  "map_provider": "osm",
+  "places_provider": "osm"
 }
 ```
 
@@ -60,6 +61,34 @@ Flags are set via environment variables (`PAYMENTS_ENABLED`,
 and enforced server-side, not just advertised: e.g. with
 `PAYMENTS_ENABLED=false`, `POST /api/rides` returns `503 payments_disabled`
 regardless of what the client does with the flag.
+
+## Location suggestions
+
+`GET /api/places/search?q=<text>&lat=<optional>&lng=<optional>` (auth
+required) returns strong pickup/destination suggestions by mixing two
+sources server-side (`src/services/geocoding.js`) instead of leaning on one:
+OpenStreetMap geocoding — Nominatim (free) or MapTiler's hosted geocoding API
+when `MAPTILER_API_KEY` is set (cheap, far less rate-limited) — always runs
+unless `PLACES_PROVIDER=sandbox`; Google Places Text Search is added on top,
+biased toward `lat`/`lng` when given, only when `PLACES_PROVIDER=hybrid` and
+`GOOGLE_PLACES_API_KEY` is configured. Results are merged and deduplicated by
+rounded coordinate into one ranked list, capped at 8:
+
+```json
+{ "success": true, "data": [
+  { "id": "google:ChIJ...", "label": "Kigali Convention Centre", "address": "KG 2 Roundabout, Kigali", "lat": -1.9536, "lng": 30.0925, "source": "google" },
+  { "id": "osm:123456", "label": "Kigali Heights", "address": "Kigali Heights, KG 7 Ave, Kigali, Rwanda", "lat": -1.9367, "lng": 30.0867, "source": "osm" }
+] }
+```
+
+`GET /api/places/reverse?lat=<lat>&lng=<lng>` (auth required) resolves a
+coordinate back to a human-readable address the same way, returning
+`{ "address": string|null }`. Both endpoints degrade gracefully: a failing or
+quota-exceeded upstream provider drops out of the merge, it never fails the
+request. The Android apps additionally run their own on-device hybrid search
+(`HybridPlacesSearch`) for the same reasons — this endpoint is what other
+clients (web portals, future integrations) use for the same suggestions
+without shipping a Places SDK.
 
 ## Delivery lifecycle
 

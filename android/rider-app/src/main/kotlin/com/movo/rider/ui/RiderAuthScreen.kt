@@ -1,6 +1,7 @@
 package com.movo.rider.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -87,15 +88,17 @@ fun RiderAuthScreen(
         )
 
         Surface(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            Modifier.fillMaxWidth().padding(horizontal = MovoSpacing.medium, vertical = MovoSpacing.small),
+            shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             shadowElevation = 16.dp
         ) {
             Column(
-                Modifier.padding(MovoSpacing.xlarge),
+                Modifier.padding(MovoSpacing.large),
                 verticalArrangement = Arrangement.spacedBy(MovoSpacing.medium)
             ) {
+                Text("RIDER ACCESS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 if (mode != RiderAuthMode.VERIFY) {
                     SegmentedChoice(
                         options = listOf(

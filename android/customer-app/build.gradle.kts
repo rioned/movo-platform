@@ -1,4 +1,4 @@
-plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id("org.jetbrains.kotlin.kapt"); id("com.google.dagger.hilt.android") }
 
 android {
     namespace = "com.movo.customer"
@@ -15,6 +15,11 @@ android {
     // -PmaptilerApiKey=... or a maptilerApiKey= line in ~/.gradle/gradle.properties
     // (not the committed gradle.properties) — same key as the server's MAPTILER_API_KEY.
     val maptilerApiKey = (project.findProperty("maptilerApiKey") as String?) ?: ""
+    val googleMapsApiKey = providers.gradleProperty("googleMapsApiKey").orElse("").get()
+    defaultConfig {
+        manifestPlaceholders["googleMapsApiKey"] = googleMapsApiKey
+        buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"$googleMapsApiKey\"")
+    }
     buildTypes {
         debug {
             buildConfigField("String", "API_BASE_URL", "\"$movoApiBaseUrl\"")
@@ -29,6 +34,20 @@ android {
 
 
 dependencies {
+    implementation("androidx.navigation:navigation-compose:2.8.5")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation("com.google.dagger:hilt-android:2.51.1")
+    kapt("com.google.dagger:hilt-compiler:2.51.1")
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.moshi:moshi-kotlin:1.15.2")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("com.google.android.libraries.places:places:3.5.0")
+    implementation("com.google.firebase:firebase-messaging:24.0.3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(project(":design"))
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.core:core-ktx:1.15.0")

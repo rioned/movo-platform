@@ -1,13 +1,14 @@
 package com.movo.rider.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import com.movo.design.EmptyState
 import com.movo.design.MovoBanner
@@ -68,7 +69,14 @@ fun EarningsScreen(
             item { ShimmerCard() }
         } else if (currentSummary != null) {
         item {
-        MovoCard(color = MovoPalette.ForestDeep, elevation = 0.dp) {
+        MovoCard(color = MovoPalette.ForestDeep, elevation = 8.dp, contentPadding = PaddingValues(0.dp)) {
+          Column(
+            Modifier.fillMaxWidth()
+                .background(Brush.linearGradient(listOf(MovoPalette.Forest, MovoPalette.ForestDeep)))
+                .padding(MovoSpacing.large)
+          ) {
+            Text("YOUR EARNINGS", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+            Spacer(Modifier.height(MovoSpacing.large))
             Text("Net earnings / RWF", style = MaterialTheme.typography.labelMedium, color = MovoPalette.Lime)
             Spacer(Modifier.height(MovoSpacing.small))
             Text(
@@ -76,12 +84,15 @@ fun EarningsScreen(
                 style = MaterialTheme.typography.displaySmall,
                 color = Color.White
             )
+            Spacer(Modifier.height(MovoSpacing.large))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.16f))
             Spacer(Modifier.height(MovoSpacing.medium))
             Text(
                 "${plural(currentSummary.count, "completed delivery", "completed deliveries")} • ${formatRwf(currentSummary.platformFees)} platform fees",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.White.copy(alpha = 0.8f)
             )
+          }
         }
         }
         } else if (error == null) {
@@ -114,8 +125,9 @@ fun EarningsScreen(
         } else if (!loading && currentSummary != null) {
                 items(currentSummary.entries) { entry ->
                     MovoCard {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(MovoSpacing.small)) {
+                            Text(formatRwf(entry.amount), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                            Column {
                                 Text(entry.orderNo, style = MaterialTheme.typography.titleSmall)
                                 Text(
                                     entry.route,
@@ -127,7 +139,6 @@ fun EarningsScreen(
                                     Text(formatTimestamp(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-                            Text(formatRwf(entry.amount), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }

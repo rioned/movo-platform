@@ -43,7 +43,7 @@ function loadRuntimeConfig(env = process.env) {
     port: positiveInteger(env.PORT, 3000, 'PORT'),
     jwtSecret,
     jwtSecretGenerated,
-    jwtExpiry: env.JWT_EXPIRY || '7d',
+    jwtExpiry: env.JWT_EXPIRY || '180d',
     dbPath: env.DB_PATH || (env.NODE_ENV === 'test' ? path.join(process.cwd(), 'movo-test.db') : path.join(process.cwd(), 'movo.db')),
     allowedOrigins,
     otpTestMode: env.OTP_TEST_MODE === 'true',
@@ -78,7 +78,17 @@ function loadRuntimeConfig(env = process.env) {
     // Not a provider-mode selector (evaluateReadiness validates every config.providers
     // value against a fixed mode allowlist), so this credential lives alongside it,
     // not inside it.
-    maptilerApiKey: env.MAPTILER_API_KEY || '',
+    maptilerApiKey: env['MAPTILER_API_KEY'] || '',
+    // Server-side location-suggestion mixer (src/services/geocoding.js): 'osm' uses
+    // Nominatim/MapTiler only (free/cheap, no Google spend); 'hybrid' adds Google
+    // Places on top when GOOGLE_PLACES_API_KEY is set, for richer named-business
+    // matches; 'sandbox' returns no suggestions (CI/offline). Kept outside
+    // `providers` like maptilerApiKey above, since it isn't validated by the same
+    // fixed provider-mode allowlist.
+    places: {
+      provider: env.PLACES_PROVIDER || 'osm',
+      googlePlacesApiKey: env.GOOGLE_PLACES_API_KEY || ''
+    },
     dispatch: {
       offerTimeoutSeconds: positiveInteger(env.DISPATCH_OFFER_TIMEOUT_SEC, 30, 'DISPATCH_OFFER_TIMEOUT_SEC'),
       initialRadiusKm: positiveNumber(env.DISPATCH_RADIUS_KM, 5, 'DISPATCH_RADIUS_KM')

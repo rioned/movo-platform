@@ -55,6 +55,7 @@ fun MovoButton(
         enabled = enabled && !loading,
         modifier = modifier.fillMaxWidth().heightIn(min = MovoSpacing.actionHeight),
         shape = androidx.compose.foundation.shape.CircleShape,
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 1.dp, disabledElevation = 0.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = container,
             contentColor = content,

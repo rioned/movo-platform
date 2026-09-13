@@ -1,4 +1,5 @@
 # Android build artifacts
+android/build-output/
 android/.gradle/
 android/**/build/
 android/**/build/outputs/

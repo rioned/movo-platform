@@ -2,6 +2,7 @@ package com.movo.rider.ui
 
 import android.app.Activity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -177,7 +178,8 @@ private fun RiderStatusHeader(
         Modifier.fillMaxWidth().clickable(onClickLabel = "Open rider account", onClick = onOpenProfile),
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 3.dp
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 6.dp
     ) {
         Row(Modifier.padding(MovoSpacing.medium), verticalAlignment = Alignment.CenterVertically) {
             MovoAvatar(state.profile.name, size = 44.dp, online = state.profile.isOnline, photo = photo)
@@ -211,7 +213,8 @@ private fun RiderStatusHeader(
 private fun IdleSheet(state: RiderHomeState, busy: Boolean, online: Boolean, onGoOnline: () -> Unit, onGoOffline: () -> Unit) {
     MovoCard(
         Modifier.padding(MovoSpacing.default),
-        color = MaterialTheme.colorScheme.surface
+        color = MaterialTheme.colorScheme.surface,
+        elevation = 8.dp
     ) {
         if (state.profile.availability == "online") {
             StatusPill("ONLINE • READY", MovoTone.Positive)

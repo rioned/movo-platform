@@ -39,6 +39,13 @@ const { createMessaging } = require('./src/services/messaging');
 const messaging = createMessaging({ provider: runtime.providers.sms, logger });
 const { createPayoutProvider } = require('./src/services/payouts');
 const payoutProvider = createPayoutProvider({ provider: runtime.providers.payout, logger });
+const { createGeocodingService } = require('./src/services/geocoding');
+const geocodingService = createGeocodingService({
+  provider: runtime.places.provider,
+  googlePlacesApiKey: runtime.places.googlePlacesApiKey,
+  maptilerApiKey: runtime.maptilerApiKey,
+  logger
+});
 
 // The client-supplied original filename is never trusted for the stored path — it could
 // contain `../` traversal segments to write outside UPLOAD_DIR. The extension is derived
@@ -1362,6 +1369,28 @@ app.post('/api/addresses', auth, (req, res) => {
 app.delete('/api/addresses/:id', auth, (req, res) => {
   db.prepare('DELETE FROM saved_addresses WHERE id=? AND user_id=?').run(req.params.id, req.user.id);
   resOK(res, { message: 'Address deleted' });
+});
+
+// ─── PLACE / LOCATION SUGGESTIONS ────────────────────────────
+// Strong location suggestions for pickup/destination pickers: mixes Google
+// Places (named businesses/landmarks, only when GOOGLE_PLACES_API_KEY is
+// configured) with OpenStreetMap/MapTiler geocoding (cheap/free, always on
+// unless PLACES_PROVIDER=sandbox). See src/services/geocoding.js.
+app.get('/api/places/search', auth, async (req, res) => {
+  const query = String(req.query.q || '').trim();
+  if (!query) return resOK(res, []);
+  const lat = req.query.lat !== undefined ? Number(req.query.lat) : undefined;
+  const lng = req.query.lng !== undefined ? Number(req.query.lng) : undefined;
+  const results = await geocodingService.search(query, { lat, lng });
+  resOK(res, results);
+});
+
+app.get('/api/places/reverse', auth, async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return resErr(res, 'lat and lng are required');
+  const address = await geocodingService.reverseGeocode(lat, lng);
+  resOK(res, { address });
 });
 
 // ─── RIDER ROUTES ────────────────────────────────────────────
@@ -3275,7 +3304,10 @@ app.get('/api/config', (req, res) => {
     // Client-side map key (tile requests, MapLibre/JS SDK) — MapTiler keys are
     // designed to be used from the browser/app and restricted by domain/bundle
     // ID in the MapTiler dashboard, not treated as a server secret.
-    maptiler_key: runtime.maptilerApiKey || null
+    maptiler_key: runtime.maptilerApiKey || null,
+    // Which server-side location-suggestion mix is active (src/services/geocoding.js)
+    // so a client can decide whether to also run its own on-device autocomplete.
+    places_provider: runtime.places.provider
   });
 });
 

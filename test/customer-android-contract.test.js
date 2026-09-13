@@ -50,7 +50,7 @@ test('Task 4 customer foundation has native map, location, realtime, and network
   ]);
 });
 
-test('Task 5 auth coordinator restores session and exposes four customer workspaces', () => {
+test('customer auth and parcel navigation replace the legacy passenger shell', () => {
   source('src/main/kotlin/com/movo/customer/auth/AuthScreen.kt', [
     /enum class AuthMode/, /PhoneField/, /Sign in/, /Create account/,
     /OtpField/, /Verify/, /Full name/, /optional/i, /isLoading/
@@ -60,10 +60,10 @@ test('Task 5 auth coordinator restores session and exposes four customer workspa
     /Kinyarwanda/, /\/api\/tickets/
   ]);
   source('src/main/kotlin/com/movo/customer/MainActivity.kt', [
-    /enum class CustomerDestination/, /Send/, /Receive/, /Activity/, /Profile/, /Tracking/,
-    /\/api\/auth\/me/, /CustomerSession/, /AuthScreen/, /NavigationBar/,
-    /BackHandler/, /session\.clear\(\)/
+    /ParcelApp/, /ParcelTheme/, /AndroidEntryPoint/
   ]);
+  source('src/main/kotlin/com/movo/customer/parcel/ParcelApp.kt', [/NavHost/, /PhoneScreen/, /OtpScreen/, /"orders"/, /"profile"/, /"tracking"/]);
+  source('src/main/kotlin/com/movo/customer/parcel/data/LiveParcelRepository.kt', [/api\/auth\/me/, /CustomerSession/, /session.clear\(\)/]);
 });
 
 test('Task 6 send flow quotes finite coordinates and requests one blind, zone-based dispatch idempotently', () => {
@@ -79,7 +79,7 @@ test('Task 6 send flow quotes finite coordinates and requests one blind, zone-ba
   const sendScreen = read('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt');
   assert.doesNotMatch(sendScreen, /preferred_rider_id|select-rider|awaiting_rider_selection/);
   source('src/main/kotlin/com/movo/customer/send/RequestDetailsSheet.kt', [/parcel/, /document/]);
-  source('src/main/kotlin/com/movo/customer/MainActivity.kt', [/SendScreen/, /onTracking/]);
+  source('src/main/kotlin/com/movo/customer/parcel/ParcelViewModel.kt', [/repository.create\(draft, id\)/, /journey.requestId\(\)/]);
 });
 
 test('Task 7 receive, activity, and tracking use HTTP authority after every realtime signal', () => {
@@ -98,10 +98,8 @@ test('Task 7 receive, activity, and tracking use HTTP authority after every real
     /ACTION_DIAL/, /google\.com\/maps\/dir/, /deliveryOtp|delivery_otp/,
     /Cancel delivery/, /Rate delivery/, /Support/, /disconnect\(\)/
   ]);
-  source('src/main/kotlin/com/movo/customer/MainActivity.kt', [
-    /ReceiveScreen/, /ActivityScreen/, /TrackingScreen/,
-    /activeSent/, /activeReceived/, /\/api\/mobile\/v1\/customer\/home/
-  ]);
+  source('src/main/kotlin/com/movo/customer/parcel/ParcelApp.kt', [/OrdersScreen/, /TrackingScreen/, /repeatOnLifecycle/, /pollTracking/]);
+  source('src/main/kotlin/com/movo/customer/parcel/data/LiveParcelRepository.kt', [/api\/mobile\/v1\/customer\/deliveries\?role=all/]);
 });
 
 test('remediation preserves the already-created delivery and durable request state', () => {
@@ -124,10 +122,8 @@ test('remediation enforces customer sessions and models authoritative relationsh
     /val role: String/, /relationship/, /orderNo/, /vehicleMake/, /vehicleModel/,
     /vehiclePlate/, /vehicleColor/, /pickup_name/, /serverTime/, /createdAt/
   ]);
-  source('src/main/kotlin/com/movo/customer/MainActivity.kt', [
-    /(it|profile)\.role != "customer"/, /CustomerApiException/, /status == 401/, /session\.profile\(\)/,
-    /ConnectivityObserver/, /collectAsState/
-  ]);
+  source('src/main/kotlin/com/movo/customer/parcel/data/LiveParcelRepository.kt', [/it.role == "customer"/, /e.code\(\) == 401/, /session.clear\(\)/]);
+  source('src/main/kotlin/com/movo/customer/parcel/ParcelApp.kt', [/ConnectivityObserver/, /collectAsStateWithLifecycle/]);
   source('src/main/kotlin/com/movo/customer/activity/ActivityScreen.kt', [/delivery\.relationship/, /orderNo/]);
   source('src/main/kotlin/com/movo/customer/receive/ReceiveScreen.kt', [/orderNo/, /Assigned to/, /delivery\.rider/]);
 });
@@ -243,14 +239,11 @@ test('branded surfaces stay legible in dark mode', () => {
   assert.match(hero, /Text\(title, color = Color\.White/);
   assert.match(hero, /Text\(subtitle, color = Color\(0xFFC1D2CB\)/);
   assert.match(hero, /background\(Brush\.linearGradient\(listOf\(Color\(0xFF102C24\), Color\(0xFF081914\)/);
-  source('src/main/kotlin/com/movo/customer/MainActivity.kt', [/MovoPalette\.Forest/, /color = Color\.White/]);
+  source('src/main/kotlin/com/movo/customer/parcel/ui/ParcelTheme.kt', [/BackgroundDark/, /TextPrimary/, /containerColor = MovoGreenPressed/]);
 });
 
-test('MOVO map-first colors and forced-restore rescan', () => {
-  source('src/main/kotlin/com/movo/customer/MainActivity.kt', [
-    /0xFFFCFCFA/, /0xFF086B4D/, /0xFF19A974/, /0xFF151817/, /0xFFF5A623/,
-    /NavigationBarItem|navigationBar.*send/i
-  ]);
+test('MOVO parcel colors and durable session compatibility', () => {
+  source('src/main/kotlin/com/movo/customer/parcel/ui/ParcelTheme.kt', [/0xFF1FAE59/, /0xFF0E1412/, /0xFF182019/, /0xFFF5F7F6/]);
   const session = read('src/main/kotlin/com/movo/customer/session/CustomerSession.kt');
   assert.doesNotMatch(session, /ride|nearby|RiderSelection|DiscoverySnapshot/);
 });

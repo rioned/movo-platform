@@ -172,7 +172,7 @@ Copy `.env.example` to `.env` for local development. Supported settings include:
 | `SMS_PROVIDER` | `sandbox` | `sandbox` or `twilio` |
 | `DISPATCH_OFFER_TIMEOUT_SEC` | `30` | Rider-offer timeout |
 | `DISPATCH_RADIUS_KM` | `5` | Initial rider search radius |
-| `JWT_EXPIRY` | `7d` | Access-token lifetime |
+| `JWT_EXPIRY` | `180d` | Access-token lifetime |
 | `TRUST_PROXY` | production only | Trust `X-Forwarded-*` from one reverse proxy hop |
 | `HTTPS_ONLY` | production only | Send HSTS; enable only behind TLS |
 | `LOG_LEVEL` | `info` in production | `debug`, `info`, `warn`, `error`, `silent` |

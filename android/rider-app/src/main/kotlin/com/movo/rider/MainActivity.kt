@@ -12,6 +12,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Home
@@ -21,6 +24,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.toArgb
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -96,7 +101,22 @@ class MainActivity : ComponentActivity() {
         )
         authenticated = api.isAuthenticated
         if (authenticated) refresh()
-        setContent { MovoTheme { RiderApp() } }
+        setContent {
+            val dark = isSystemInDarkTheme()
+            MovoTheme {
+                val barSurface = MaterialTheme.colorScheme.surface
+                val statusSurface = if (authenticated) MaterialTheme.colorScheme.background else com.movo.design.MovoPalette.ForestDeep
+                SideEffect {
+                    window.statusBarColor = statusSurface.toArgb()
+                    window.navigationBarColor = barSurface.toArgb()
+                    WindowInsetsControllerCompat(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = authenticated && !dark
+                        isAppearanceLightNavigationBars = !dark
+                    }
+                }
+                RiderApp()
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -263,21 +283,30 @@ class MainActivity : ComponentActivity() {
             snackbarHost = { SnackbarHost(snackbarHost) },
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
+              Surface(
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shadowElevation = 12.dp
+              ) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     RiderTab.entries.forEach { item ->
                         NavigationBarItem(
                             selected = tab == item,
                             onClick = { tab = item },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
+                            icon = { Icon(item.icon, contentDescription = null) },
                             label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                                 selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                                indicatorColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         )
                     }
                 }
+              }
             }
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
