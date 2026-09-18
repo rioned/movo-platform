@@ -202,11 +202,11 @@ test('delivery creation idempotency is actor scoped and rejects a changed body f
   assert.notEqual(otherActor.json.data.delivery.id, created.json.data.delivery.id);
 });
 
-// Rider-selection decision (spec §12): dispatch is blind and zone-based. A customer
-// or business can never pin, browse or replace a specific rider — the platform picks
-// who gets offered a delivery, not the client. These tests replace the old
-// preferred_rider_id / select-rider suite now that the feature has been removed.
-test('a client-supplied preferred_rider_id is ignored — dispatch is always blind and zone-based (spec §12)', async () => {
+// Rider choice: the customer picks who they hand the parcel to, and dispatch offers
+// that rider the job first. The choice is validated at submit time and is a first
+// refusal, never a lock — an unavailable choice is rejected outright rather than
+// silently swapped for a stranger.
+test('choosing a rider who is offline is rejected outright, never silently substituted', async () => {
   const sender = await register('customer');
   const offline = await register('rider');
   setRider(offline.id, { online: 'offline' });
@@ -216,14 +216,28 @@ test('a client-supplied preferred_rider_id is ignored — dispatch is always bli
   const created = await request('/api/deliveries', {
     token: sender.token, method: 'POST', body: deliveryBody({ preferred_rider_id: offline.id })
   });
-  assert.equal(created.response.status, 201, created.json.error);
-  assert.equal(created.json.data.delivery.preferred_rider_id, null, 'a client cannot pin a specific rider via preferred_rider_id');
-  assert.equal(created.json.data.delivery.dispatch_mode, 'automatic');
-  assert.equal(created.json.data.delivery.status, 'searching');
+  assert.equal(created.response.status, 409, 'an unavailable chosen rider must not be quietly replaced');
+  assert.equal(created.json.code, 'rider_unavailable');
+  assert.match(created.json.error, /no longer available/);
+});
 
-  const offeredRiderIds = db.prepare('SELECT rider_id FROM delivery_offers WHERE delivery_id=?').all(created.json.data.delivery.id).map(o => o.rider_id);
-  assert.ok(offeredRiderIds.includes(onlineRider.id), 'an eligible, actually-online rider must still be offered the delivery');
-  assert.ok(!offeredRiderIds.includes(offline.id), 'the client-requested (offline, ineligible) rider must never be offered the delivery');
+test('the rider the customer chose is the first one offered the delivery', async () => {
+  const sender = await register('customer');
+  const near = await register('rider');
+  setRider(near.id, { lat: -1.9442, lng: 30.0620 });
+  const chosen = await register('rider');
+  setRider(chosen.id, { lat: -1.9520, lng: 30.0700 });
+
+  const created = await request('/api/deliveries', {
+    token: sender.token, method: 'POST', body: deliveryBody({ preferred_rider_id: chosen.id })
+  });
+  assert.equal(created.response.status, 201, created.json.error);
+  const delivery = created.json.data.delivery;
+  assert.equal(delivery.preferred_rider_id, chosen.id, 'the choice is recorded on the delivery');
+
+  const offers = db.prepare("SELECT rider_id FROM delivery_offers WHERE delivery_id=? AND status='offered'").all(delivery.id);
+  assert.equal(offers.length, 1, 'only the chosen rider is approached first');
+  assert.equal(offers[0].rider_id, chosen.id, 'the closer rider must not jump the customer\'s choice');
 });
 
 test('there is no customer-facing endpoint to hand-pick or replace a specific rider', async () => {
@@ -232,6 +246,8 @@ test('there is no customer-facing endpoint to hand-pick or replace a specific ri
   setRider(rider.id);
   const created = await request('/api/deliveries', { token: sender.token, method: 'POST', body: deliveryBody() });
   assert.equal(created.response.status, 201, created.json.error);
+  // Rider choice is settled once, when the delivery is created. There is deliberately
+  // no endpoint to swap the rider on a live delivery.
   const selectAttempt = await request(`/api/deliveries/${created.json.data.delivery.id}/select-rider`, {
     token: sender.token, method: 'PUT', body: { preferred_rider_id: rider.id }
   });
@@ -260,14 +276,24 @@ test('nearby riders include only fresh approved online idle riders within radius
   setRider(invalid.id, { lat: 999, lng: 999 });
   setRider(distant.id, { lat: -2.10, lng: 30.20 });
 
-  // Dispatch is blind (spec §12): the customer-facing endpoint only reports how many
-  // eligible riders are around, never who they are, so the filtering pipeline
-  // (freshness, approval, online status, valid coordinates, radius) is verified via
-  // the count rather than by inspecting individual rider identities.
+  // The customer-facing endpoint lists the eligible riders so one can be chosen, so
+  // the filtering pipeline (freshness, approval, online status, valid coordinates,
+  // radius) is verified through the list itself, not only the count.
   const result = await request('/api/mobile/v1/customer/nearby-riders?lat=-1.9441&lng=30.0619&radius_km=5', { token: customer.token });
   assert.equal(result.response.status, 200, result.json.error);
-  assert.equal(result.json.data.riders, undefined);
   assert.equal(result.json.data.rider_count, 2, 'only near and farther are approved, online, fresh, validly-located and within radius');
+  assert.equal(result.json.data.riders.length, 2, 'every counted rider must be listed for the customer to choose from');
+
+  const listedIds = result.json.data.riders.map(rider => rider.id);
+  assert.ok(listedIds.includes(near.id) && listedIds.includes(farther.id), 'exactly the two eligible riders are offered as choices');
+  for (const excluded of [offline.id, pending.id, busy.id, stale.id, invalid.id, distant.id]) {
+    assert.ok(!listedIds.includes(excluded), 'an ineligible rider must never be offered as a choice');
+  }
+  // Ordered nearest-first, which is the order the chooser presents them in.
+  assert.equal(result.json.data.riders[0].id, near.id, 'the nearest rider is listed first');
+  assert.ok(result.json.data.riders[0].eta_minutes >= 1, 'each choice carries an ETA');
+  assert.ok(result.json.data.riders[0].motorcycle_plate, 'the plate the customer will look for is included');
+  assert.ok(!('phone' in result.json.data.riders[0]), 'a nearby rider is not contactable before the job is accepted');
 });
 
 test('phone-matched receiver sees a local-format delivery while an unrelated customer cannot enumerate or open it', async () => {

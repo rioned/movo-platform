@@ -32,7 +32,51 @@ data class SendDraft(
     val senderName: String = "", val senderPhone: String = "",
     val receiverName: String = "", val receiverPhone: String = "",
     val itemType: String = "parcel", val itemDescription: String = "",
-    val deliveryInstructions: String = "", val paymentMethod: String = "cash"
+    val deliveryInstructions: String = "", val paymentMethod: String = "cash",
+    // The rider the customer chose on the discovery map, if any. Null means "let MOVO
+    // pick" — the original automatic dispatch — so a customer who doesn't care about
+    // who delivers keeps exactly the previous behaviour. New fields go last because
+    // CustomerSession restores this positionally.
+    val preferredRiderId: String? = null, val preferredRiderLabel: String? = null
+)
+
+/**
+ * One rider the customer can choose from on the discovery map. Carries exactly the
+ * facts that decide a handover — the plate to look for, standing, and how far away
+ * they are — and never a phone number or legal name, which stay withheld until the
+ * rider accepts the job.
+ */
+data class NearbyRider(
+    val id: String,
+    val plate: String? = null,
+    val make: String? = null,
+    val type: String? = null,
+    val color: String? = null,
+    val rating: Double = 0.0,
+    val ratingCount: Int = 0,
+    val distanceKm: Double = 0.0,
+    val etaMinutes: Int = 0,
+    val coordinate: Coordinate? = null,
+    val zone: String? = null,
+    val sameZone: Boolean = false
+) {
+    /** What the customer calls this rider in the list and on the map. */
+    val label: String get() = plate?.takeIf(String::isNotBlank) ?: "MOVO rider"
+}
+
+fun JSONObject.toNearbyRider(): NearbyRider = NearbyRider(
+    id = optString("id"),
+    plate = string("motorcycle_plate"),
+    make = string("motorcycle_make"),
+    type = string("motorcycle_type"),
+    color = string("motorcycle_color"),
+    rating = double("rating") ?: 0.0,
+    ratingCount = optInt("rating_count"),
+    distanceKm = double("distance_km") ?: 0.0,
+    etaMinutes = optInt("eta_minutes"),
+    coordinate = double("lat")?.let { lat -> double("lng")?.let { Coordinate(lat, it) } },
+    zone = string("zone"),
+    sameZone = optBoolean("same_zone", false)
 )
 data class SendJourney(
     val draft: SendDraft, val quote: Quote?, val deliveryId: String?,

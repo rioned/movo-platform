@@ -1,6 +1,7 @@
 package com.movo.customer.send
 
 import com.movo.customer.model.Coordinate
+import com.movo.customer.model.NearbyRider
 
 sealed interface DiscoveryPhase {
     data object Locating : DiscoveryPhase
@@ -17,17 +18,25 @@ sealed interface DiscoveryPhase {
 }
 
 /**
- * Dispatch is blind and zone-based (spec §12), so the customer only ever learns
- * how many riders are around — never who they are, where exactly, or a way to
- * pick one.
+ * The customer's view of who can take their parcel. Riders are listed so the
+ * customer can choose who they are handing it to; picking one is a preference
+ * dispatch honours first, never a lock — see the discovery sheet's "any rider"
+ * option, which restores the automatic nearest-rider match.
  */
 data class DiscoverySnapshot(
     val phase: DiscoveryPhase,
     val pickup: Coordinate? = null,
-    val riderCount: Int = 0
+    val riderCount: Int = 0,
+    val riders: List<NearbyRider> = emptyList(),
+    val selectedRiderId: String? = null
 ) {
+    val selectedRider: NearbyRider? get() = riders.firstOrNull { it.id == selectedRiderId }
+
     fun canContinue(): Boolean =
         phase == DiscoveryPhase.Available && pickup?.isFinite == true && riderCount > 0
+
+    fun withSelection(riderId: String?): DiscoverySnapshot =
+        copy(selectedRiderId = riderId?.takeIf { id -> riders.any { it.id == id } })
 
     fun invalidateForPickup(next: Coordinate?): DiscoverySnapshot = DiscoverySnapshot(
         phase = if (next?.isFinite == true) {

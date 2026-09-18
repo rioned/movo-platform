@@ -1796,7 +1796,7 @@ function customerDeliveries(user) {
 function eligibleNearbyRiders(lat, lng, radiusKm) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
   const pickupZoneId = resolveZoneAt(lat, lng).id;
-  const riders = db.prepare(`SELECT u.id,u.full_name,r.avg_rating,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,
+  const riders = db.prepare(`SELECT u.id,u.full_name,r.avg_rating,r.rating_count,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,
     r.current_lat,r.current_lng,r.current_zone_id,r.current_zone_name,r.last_location_update,
     (SELECT COUNT(*) FROM deliveries d WHERE d.rider_id=r.user_id AND d.status NOT IN ('delivered','cancelled','failed')) AS active_count
     FROM users u JOIN riders r ON r.user_id=u.id
@@ -1818,6 +1818,43 @@ function eligibleNearbyRiders(lat, lng, radiusKm) {
     .map(({ active_count, rank, ...rider }) => rider);
 }
 
+/**
+ * Rough pickup ETA from straight-line distance, using an ops-tunable average
+ * motorcycle speed. Rounded up and floored at a minute so the customer is never
+ * told a rider is arriving sooner than they plausibly can.
+ */
+function riderEtaMinutes(distanceKm) {
+  const speed = Math.max(5, parseFloat(getConfig('rider_avg_speed_kmph', '25')) || 25);
+  return Math.max(1, Math.ceil((Number(distanceKm) / speed) * 60));
+}
+
+/**
+ * The customer-facing view of one nearby rider, for the "choose your rider" map.
+ *
+ * A customer picking who to hand their parcel to needs exactly the facts that
+ * decide that handover — the plate they will look for, the rider's standing, and
+ * how far away they are. Phone number, legal name and rating history stay withheld:
+ * until a rider accepts there is no agreed job between the two parties, and a
+ * browsable directory of contactable riders is a harassment surface, not a feature.
+ */
+function customerRiderPreview(rider) {
+  return {
+    id: rider.id,
+    motorcycle_plate: rider.motorcycle_plate || null,
+    motorcycle_make: rider.motorcycle_make || null,
+    motorcycle_type: rider.motorcycle_type || null,
+    motorcycle_color: rider.motorcycle_color || null,
+    rating: Math.round((Number(rider.avg_rating) || 0) * 10) / 10,
+    rating_count: Number(rider.rating_count) || 0,
+    distance_km: rider.distance_km,
+    eta_minutes: riderEtaMinutes(rider.distance_km),
+    lat: rider.current_lat,
+    lng: rider.current_lng,
+    zone: rider.current_zone_name || null,
+    same_zone: Boolean(rider.same_zone)
+  };
+}
+
 app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (req, res) => {
   const lat = Number(req.query.lat);
   const lng = Number(req.query.lng);
@@ -1831,9 +1868,6 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
   // doesn't operate here at all" look identical to the client.
   const zone = findZone(lat, lng);
   const riders = eligibleNearbyRiders(lat, lng, radiusKm);
-  // Dispatch is blind and zone-based (spec §12): a customer learns whether riders
-  // are around at all, never which ones, so there's nothing here to browse or
-  // solicit by name ahead of assignment — see the rider-selection decision record.
   resOK(res, {
     rider_count: riders.length,
     // Riders already inside the pickup's own zone are the ones dispatch will reach
@@ -1841,6 +1875,9 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
     in_zone_rider_count: riders.filter(rider => rider.same_zone).length,
     nearest_km: riders.length ? riders[0].distance_km : null,
     radius_km: radiusKm,
+    // The customer picks the rider they are handing the parcel to; each entry is a
+    // mappable marker with the facts needed to choose, never a contactable profile.
+    riders: riders.map(customerRiderPreview),
     in_service_area: Boolean(zone), zone: zone ? { id: zone.id, name: zone.name } : null,
     serverTime: new Date().toISOString()
   });
@@ -1882,10 +1919,7 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
     service_type, pickup_address, pickup_lat, pickup_lng, pickup_name, pickup_phone, pickup_instructions,
     dest_address, dest_lat, dest_lng, dest_name, dest_phone, dest_instructions,
     item_description, item_weight, item_category, special_instructions,
-    payment_method, preferred_time, business_ref, department, scheduled_for
-    // No preferred_rider_id: dispatch is blind and zone-based (spec §12) — a customer
-    // or business never gets to browse or hand-pick an identified rider, so the field
-    // is intentionally not read from the request body at all.
+    payment_method, preferred_time, business_ref, department, scheduled_for, preferred_rider_id
   } = body;
 
   if (!pickup_address || !dest_address || !pickup_name || !pickup_phone || !dest_name || !dest_phone) {
@@ -1898,6 +1932,22 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
   const destLng = validate.longitude(dest_lng, 'dest_lng');
   const pickupPhone = validate.requiredPhone(pickup_phone, 'pickup_phone');
   const destPhone = validate.requiredPhone(dest_phone, 'dest_phone');
+
+  // The customer picked a specific rider off the discovery map, so that rider is
+  // offered the job first. The choice is a first refusal, never a lock: dispatch
+  // falls back to everyone else if the rider declines or goes quiet, so someone who
+  // closes the app mid-booking cannot strand the customer's parcel. A rider who is
+  // no longer dispatchable at submit time is rejected outright rather than silently
+  // substituted, so the customer is never told "your rider" about a stranger.
+  let preferredRiderId = null;
+  if (preferred_rider_id) {
+    preferredRiderId = validate.optionalString(preferred_rider_id, 'preferred_rider_id', { max: 64 });
+    const candidate = db.prepare(`SELECT u.id FROM users u JOIN riders r ON r.user_id=u.id
+      WHERE u.id=? AND u.status='active' AND r.approval_status='approved' AND r.online_status='online'`).get(preferredRiderId);
+    if (!candidate) {
+      throw new ValidationError('That rider is no longer available. Pick another rider or let MOVO choose for you.', { code: 'rider_unavailable', status: 409 });
+    }
+  }
 
   const price = calcPrice(pickupLat, pickupLng, destLat, destLng, service_type);
   if (price.error === 'out_of_service_area') {
@@ -1923,16 +1973,16 @@ function createDelivery(actor, body, { idempotencyKey = null, idempotencyHash = 
     dest_address,dest_lat,dest_lng,dest_name,dest_phone,dest_instructions,delivery_otp,
     item_description,item_weight,item_category,special_instructions,
     origin_zone,dest_zone,distance_km,customer_price,rider_earnings,platform_fee,total_charge,
-    payment_method,preferred_time,business_ref,department,scheduled_for,
+    payment_method,preferred_time,business_ref,department,scheduled_for,preferred_rider_id,
     idempotency_actor_id,idempotency_key,idempotency_hash
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, orderNo, actor.id, actor.role === 'business' ? actor.id : null, service_type, isScheduled ? 'scheduled' : 'created',
     pickup_address, pickupLat, pickupLng, pickup_name, pickupPhone, pickup_instructions || null, pickupOtp,
     dest_address, destLat, destLng, dest_name, destPhone, dest_instructions || null, deliveryOtp,
     item_description || null, item_weight || null, item_category || null, special_instructions || null,
     price.originZone.name, price.destZone.name, price.distance_km,
     price.customerPrice, price.riderEarnings, price.platformFee, price.totalCharge,
-    payment_method || 'mobile_money', preferred_time || null, business_ref || null, department || null, isScheduled ? scheduledDate.toISOString() : null,
+    payment_method || 'mobile_money', preferred_time || null, business_ref || null, department || null, isScheduled ? scheduledDate.toISOString() : null, preferredRiderId,
     idempotencyKey ? actor.id : null, idempotencyKey, idempotencyHash
   );
   addEvent(id, isScheduled ? 'scheduled' : 'created', pickupLat, pickupLng, isScheduled ? `Scheduled for ${scheduledDate.toISOString()}` : 'Delivery requested');
@@ -3163,6 +3213,32 @@ function emitDeliveryUpdate(deliveryId, payload = {}) {
   io.to(`delivery:${deliveryId}`).emit('delivery_update', { delivery_id: deliveryId, ...payload });
 }
 
+/**
+ * Offers one delivery to one rider over their socket. Idempotent by design: a rider
+ * who already holds a live offer for this delivery keeps the same offer id instead
+ * of accumulating duplicates as the search radius expands.
+ */
+function offerDeliveryToRider(delivery, rider, timeoutSeconds) {
+  const existingOffer = db.prepare("SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=? AND status='offered' AND expires_at>datetime('now')").get(delivery.id, rider.id);
+  const offerId = existingOffer?.id || uuidv4();
+  if (!existingOffer) {
+    db.prepare("INSERT INTO delivery_offers (id,delivery_id,rider_id,expires_at) VALUES (?,?,?,datetime('now',?))")
+      .run(offerId, delivery.id, rider.id, `+${timeoutSeconds} seconds`);
+  }
+  emitToUser(rider.id, 'new_delivery', {
+    offer_id: offerId,
+    id: delivery.id, order_no: delivery.order_no, service_type: delivery.service_type,
+    pickup_address: delivery.pickup_address, pickup_lat: delivery.pickup_lat, pickup_lng: delivery.pickup_lng,
+    pickup_name: delivery.pickup_name, pickup_phone: delivery.pickup_phone,
+    dest_address: delivery.dest_address, dest_lat: delivery.dest_lat, dest_lng: delivery.dest_lng,
+    dest_name: delivery.dest_name, dest_phone: delivery.dest_phone,
+    earnings: delivery.rider_earnings, distance_km: delivery.distance_km,
+    estimated_minutes: delivery.est_delivery_time,
+    timeout: timeoutSeconds
+  });
+  return offerId;
+}
+
 function dispatchDelivery(deliveryId) {
   updateDeliveryStatus(deliveryId, 'searching');
   const d = db.prepare('SELECT * FROM deliveries WHERE id=?').get(deliveryId);
@@ -3171,44 +3247,53 @@ function dispatchDelivery(deliveryId) {
   let radius = parseFloat(getConfig('rider_search_radius_km', '5'));
   const expandStep = parseFloat(getConfig('rider_search_expand_km', '2'));
   const maxRadius = radius + expandStep * 3;
+  const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'));
+  // A customer who picked a rider off the discovery map gets that rider offered the
+  // job first, alone, before anyone else is approached. The preference is consumed
+  // once honoured or once it becomes impossible (the rider went offline or stale),
+  // after which dispatch behaves exactly as it always did.
+  let preferredRiderId = d.preferred_rider_id || null;
+
+  function stillSearching() {
+    const current = db.prepare('SELECT status FROM deliveries WHERE id=?').get(deliveryId);
+    return Boolean(current && current.status === 'searching');
+  }
 
   function search() {
+    // First refusal for the chosen rider: offered on their own, at any distance,
+    // because the customer has already decided who they are handing the parcel to.
+    if (preferredRiderId) {
+      const chosen = eligibleNearbyRiders(Number(d.pickup_lat), Number(d.pickup_lng), maxRadius)
+        .find(rider => rider.id === preferredRiderId);
+      if (chosen) {
+        offerDeliveryToRider(d, chosen, timeoutSeconds);
+        setTimeout(() => {
+          if (!stillSearching()) return;
+          // Declined, lapsed, or went quiet — release the preference and fall back to
+          // the normal expanding broadcast so the parcel is never stranded.
+          preferredRiderId = null;
+          search();
+        }, timeoutSeconds * 1000);
+        return;
+      }
+      preferredRiderId = null;
+    }
+
     const nearby = eligibleNearbyRiders(Number(d.pickup_lat), Number(d.pickup_lng), radius)
       .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
 
     if (nearby.length > 0) {
-      for (const rider of nearby.slice(0, 5)) {
-        const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'));
-        const existingOffer = db.prepare("SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=? AND status='offered' AND expires_at>datetime('now')").get(d.id, rider.id);
-        const offerId = existingOffer?.id || uuidv4();
-        if (!existingOffer) db.prepare("INSERT INTO delivery_offers (id,delivery_id,rider_id,expires_at) VALUES (?,?,?,datetime('now',?))")
-          .run(offerId, d.id, rider.id, `+${timeoutSeconds} seconds`);
-        emitToUser(rider.id, 'new_delivery', {
-            offer_id: offerId,
-            id: d.id, order_no: d.order_no, service_type: d.service_type,
-            pickup_address: d.pickup_address, pickup_lat: d.pickup_lat, pickup_lng: d.pickup_lng,
-            pickup_name: d.pickup_name, pickup_phone: d.pickup_phone,
-            dest_address: d.dest_address, dest_lat: d.dest_lat, dest_lng: d.dest_lng,
-            dest_name: d.dest_name, dest_phone: d.dest_phone,
-            earnings: d.rider_earnings, distance_km: d.distance_km,
-            estimated_minutes: d.est_delivery_time,
-            timeout: timeoutSeconds
-          });
-      }
-      // Set timeout for auto-expand
-      const timeout = parseInt(getConfig('rider_accept_timeout_sec', '30')) * 1000;
+      for (const rider of nearby.slice(0, 5)) offerDeliveryToRider(d, rider, timeoutSeconds);
       setTimeout(() => {
-        const current = db.prepare('SELECT status FROM deliveries WHERE id=?').get(deliveryId);
-        if (current && current.status === 'searching') {
-          if (radius < maxRadius) {
-            radius += expandStep;
-            search();
-          } else {
-            updateDeliveryStatus(deliveryId, 'failed', { note: 'No rider found' });
-            notifyUser(d.customer_id, 'no_rider', 'No Rider Available', `We could not find a rider for ${d.order_no}. Please try again.`, { delivery_id: d.id });
-          }
+        if (!stillSearching()) return;
+        if (radius < maxRadius) {
+          radius += expandStep;
+          search();
+        } else {
+          updateDeliveryStatus(deliveryId, 'failed', { note: 'No rider found' });
+          notifyUser(d.customer_id, 'no_rider', 'No Rider Available', `We could not find a rider for ${d.order_no}. Please try again.`, { delivery_id: d.id });
         }
-      }, timeout);
+      }, timeoutSeconds * 1000);
     } else {
       if (radius < maxRadius) {
         radius += expandStep;

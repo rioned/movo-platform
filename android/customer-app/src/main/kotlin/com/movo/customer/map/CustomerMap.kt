@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.movo.customer.BuildConfig
 import com.movo.customer.R
 import com.movo.customer.model.Coordinate
+import com.movo.customer.model.NearbyRider
 import com.movo.design.maps.MapTileSources
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
@@ -88,6 +89,7 @@ fun CustomerMap(
     pickup: Coordinate?, destination: Coordinate?,
     assignedRider: Coordinate? = null, modifier: Modifier = Modifier,
     discoveryActive: Boolean = false, showPickupHalo: Boolean = false,
+    nearbyRiders: List<NearbyRider> = emptyList(), selectedRiderId: String? = null,
     onCoordinateSelected: (Coordinate) -> Unit = {}
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -170,6 +172,14 @@ fun CustomerMap(
             marker(coordinate, "Pickup", pickupPin)
         }
         destination?.let { marker(it, "Destination", destinationPin) }
+        // Nearby riders, drawn before the pickup pin so the customer's own position
+        // stays on top, and with the chosen rider added last so their marker wins any
+        // overlap. These are the markers the customer taps a row to select.
+        nearbyRiders.filter { it.coordinate?.isFinite == true && it.id != selectedRiderId }
+            .forEach { marker(it.coordinate!!, it.label, motorcycleIcon, Marker.ANCHOR_CENTER) }
+        nearbyRiders.filter { it.id == selectedRiderId }.forEach { rider ->
+            rider.coordinate?.takeIf { it.isFinite }?.let { marker(it, "Your rider ${rider.label}", motorcycleIcon, Marker.ANCHOR_CENTER) }
+        }
         assignedRider?.takeIf { it.isFinite }?.let { marker(it, "Assigned rider motorcycle", motorcycleIcon, Marker.ANCHOR_CENTER) }
         map.fitToPoints(points)
         map.overlays.filterIsInstance<CopyrightOverlay>().firstOrNull()?.let { attribution ->

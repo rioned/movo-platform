@@ -66,7 +66,7 @@ test('customer auth and parcel navigation replace the legacy passenger shell', (
   source('src/main/kotlin/com/movo/customer/parcel/data/LiveParcelRepository.kt', [/api\/auth\/me/, /CustomerSession/, /session.clear\(\)/]);
 });
 
-test('Task 6 send flow quotes finite coordinates and requests one blind, zone-based dispatch idempotently', () => {
+test('Task 6 send flow quotes finite coordinates and requests one zone-based dispatch with the customer\'s chosen rider, idempotently', () => {
   source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
     /fun MapFirstSendScreen\(/, /requestCurrent/, /RequestPermission/,
     /Pickup/, /Destination/, /Sender/, /Receiver/,
@@ -74,10 +74,12 @@ test('Task 6 send flow quotes finite coordinates and requests one blind, zone-ba
     /fun ConfirmRequestSheet\(/, /Idempotency|idempotencyKey/, /api\.post\("\/api\/deliveries"/,
     /submitting/
   ]);
-  // Dispatch is blind and zone-based (spec §12): the confirm step never lets the
-  // customer pin a specific rider.
+  // The customer picks the rider they hand the parcel to. The preference rides in the
+  // create call, and is omitted entirely when they chose "any available rider" so
+  // automatic dispatch is untouched for anyone who skipped the list.
   const sendScreen = read('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt');
-  assert.doesNotMatch(sendScreen, /preferred_rider_id|select-rider|awaiting_rider_selection/);
+  assert.match(sendScreen, /preferredRiderId\?\.let \{ put\("preferred_rider_id", it\) \}/, 'the chosen rider must be sent as a first-refusal preference');
+  assert.match(sendScreen, /onSelectRider/, 'the discovery sheet must let the customer choose a rider');
   source('src/main/kotlin/com/movo/customer/send/RequestDetailsSheet.kt', [/parcel/, /document/]);
   source('src/main/kotlin/com/movo/customer/parcel/ParcelViewModel.kt', [/repository.create\(draft, id\)/, /journey.requestId\(\)/]);
 });
@@ -166,25 +168,40 @@ test('remediation keeps customer screens usable on narrow layouts', () => {
   source('src/main/kotlin/com/movo/customer/map/CustomerMap.kt', [/modifier = modifier\.clipToBounds\(\)/]);
 });
 
-test('the confirm step requests one blind dispatch, never a chosen rider', () => {
+test('the confirm step offers the chosen rider as a preference and still states the automatic fallback', () => {
   source('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt', [
     /fun ConfirmRequestSheet\(/, /PriceSummary/, /onConfirm/, /submitting/, /idempotencyKey|creationKey/,
+    // The fallback is still automatic, so the copy that promises a nearest-rider match
+    // must stay true even when a specific rider was chosen.
     /nearest available rider/i
   ]);
+  // Choosing a rider is a preference, never a lock: the create call carries the id, and
+  // the discovery sheet is what offers the choice.
   const sendScreen = read('src/main/kotlin/com/movo/customer/send/MapFirstSendScreen.kt');
-  assert.doesNotMatch(sendScreen, /preferred_rider_id|RiderSelectionScreen|RatingStars/);
+  assert.match(sendScreen, /preferredRiderId/, 'the chosen rider must be carried into the request');
+  assert.match(sendScreen, /controller\.select\(/, 'the customer must be able to choose a rider');
 });
 
-test('map-first discovery sheet exposes honest gated rider availability', () => {
+test('map-first discovery sheet lists riders to choose from and preserves honest gated availability', () => {
   source('src/main/kotlin/com/movo/customer/send/DiscoverySheet.kt', [
     /Finding your pickup/, /Finding riders near you/, /No riders near this pickup/,
     /Rider availability needs a connection/, /Scan again/, /Adjust pickup/,
-    /snapshot.canContinue/, /riders nearby/, /CircularProgressIndicator/,
-    /ValueAnimator\.areAnimatorsEnabled/, /reducedMotion/
+    /snapshot\.canContinue/, /riders nearby/, /CircularProgressIndicator/,
+    /ValueAnimator\.areAnimatorsEnabled/, /reducedMotion/,
+    // The chooser itself: every listed rider is pickable, and "any available rider"
+    // restores automatic dispatch.
+    /Any available rider/, /onSelectRider/, /RiderOption/, /snapshot\.selectedRider\b/,
+    /etaMinutes/, /ratingCount|RatingStars/
   ]);
+  // A rider row must never expose a way to contact them before they accept the job.
+  const sheet = read('src/main/kotlin/com/movo/customer/send/DiscoverySheet.kt');
+  assert.doesNotMatch(sheet, /rider\.phone|pickupPhone|contactRider/, 'a nearby rider has no contactable surface before acceptance');
   source('src/main/kotlin/com/movo/customer/map/CustomerMap.kt', [
     /clipToBounds/, /ic_movo_motorcycle/, /discoveryActive/, /showPickupHalo/,
-    /withInfiniteAnimationFrameMillis/, /PULSE_DURATION_MS/, /ValueAnimator[.]areAnimatorsEnabled/
+    /withInfiniteAnimationFrameMillis/, /PULSE_DURATION_MS/, /ValueAnimator[.]areAnimatorsEnabled/,
+    // Nearby riders are drawn on the map, with the chosen one added last so it wins
+    // any overlap with the others.
+    /nearbyRiders/, /selectedRiderId/, /Your rider/
   ]);
 });
 
@@ -244,8 +261,12 @@ test('branded surfaces stay legible in dark mode', () => {
 
 test('MOVO parcel colors and durable session compatibility', () => {
   source('src/main/kotlin/com/movo/customer/parcel/ui/ParcelTheme.kt', [/0xFF1FAE59/, /0xFF0E1412/, /0xFF182019/, /0xFFF5F7F6/]);
+  // The send journey does carry the customer's chosen rider, so this guard is about the
+  // parcel session staying free of the *ride-booking* domain (a different product line
+  // with its own draft shape) — not about the word "rider" appearing anywhere.
   const session = read('src/main/kotlin/com/movo/customer/session/CustomerSession.kt');
-  assert.doesNotMatch(session, /ride|nearby|RiderSelection|DiscoverySnapshot/);
+  assert.doesNotMatch(session, /RideBooking|RideModels|ride_offers|RideDraft|DiscoverySnapshot/, 'the parcel session must not absorb ride-booking state');
+  assert.match(session, /preferredRiderId/, 'the chosen rider is part of the send journey and must persist with it');
 });
 
 test('the customer app resolves the pickup address through the shared GeocodingService abstraction (spec §63)', () => {

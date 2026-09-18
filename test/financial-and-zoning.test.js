@@ -368,7 +368,17 @@ test('nearby-riders reports in_service_area so the client can distinguish "no ri
   assert.equal(inArea.response.status, 200, inArea.json.error);
   assert.equal(inArea.json.data.in_service_area, true);
   assert.ok(inArea.json.data.zone?.name);
-  assert.equal(inArea.json.data.riders, undefined, 'dispatch is blind: a customer must never see individually identified riders (spec §12)');
+  assert.ok(Array.isArray(inArea.json.data.riders), 'the customer chooses a rider, so nearby riders must be listed');
+  for (const rider of inArea.json.data.riders) {
+    // The choose-a-rider map needs the facts that decide a handover and nothing
+    // more: no phone number and no legal name before a rider accepts the job.
+    for (const forbidden of ['phone', 'full_name', 'name', 'email']) {
+      assert.equal(rider[forbidden], undefined, `a nearby rider must not expose ${forbidden} before acceptance`);
+    }
+    assert.equal(typeof rider.rating, 'number');
+    assert.equal(typeof rider.eta_minutes, 'number');
+    assert.ok(rider.eta_minutes >= 1, 'every listed rider carries a usable ETA');
+  }
   assert.ok(typeof inArea.json.data.rider_count === 'number');
 
   const outOfArea = await request(`/api/mobile/v1/customer/nearby-riders?lat=${OUT_OF_AREA.lat}&lng=${OUT_OF_AREA.lng}&radius_km=5`, { token: customer.token });
@@ -407,7 +417,54 @@ test('a rider location is resolved to its zone at ingest, and that zone drives d
   assert.ok(nearby.json.data.rider_count >= 1, 'an online rider inside the pickup zone must be discoverable');
   assert.ok(nearby.json.data.in_zone_rider_count >= 1, 'the rider shares the pickup zone, so they must count as in-zone');
   assert.equal(typeof nearby.json.data.nearest_km, 'number');
-  assert.equal(nearby.json.data.riders, undefined, 'blind dispatch: still no individually identified riders');
+  assert.ok(nearby.json.data.riders.some(rider => rider.id === rider.id && rider.motorcycle_plate), 'listed riders carry the plate the customer will look for');
+  for (const listed of nearby.json.data.riders) {
+    assert.equal(listed.phone, undefined, 'a nearby rider never exposes a phone number before accepting');
+  }
+});
+
+test('the rider a customer chose is offered the job first, and dispatch falls back if they go quiet', async () => {
+  // The customer picks who they hand the parcel to; the backend honours that as a
+  // first refusal. The delivery must still be dispatchable to everyone else when the
+  // chosen rider declines, times out or drops offline, so a preference can never
+  // strand a parcel.
+  const admin = await adminToken();
+  const chosen = await onlineRider(admin);
+
+  // A second online rider at the same pickup, who must NOT be offered first.
+  const other = await onlineRider(admin);
+
+  const customer = await register('customer');
+  const created = await request('/api/deliveries', {
+    method: 'POST', token: customer.token,
+    body: deliveryBody({ preferred_rider_id: chosen.id })
+  });
+  assert.equal(created.response.status, 201, created.json.error);
+  const deliveryId = created.json.data.delivery.id;
+
+  const stored = db.prepare('SELECT preferred_rider_id FROM deliveries WHERE id=?').get(deliveryId);
+  assert.equal(stored.preferred_rider_id, chosen.id, 'the customer\'s choice is persisted with the delivery');
+
+  // Dispatch runs synchronously on create, so the chosen rider already holds the
+  // only live offer and the other rider was not approached.
+  const offers = db.prepare("SELECT rider_id FROM delivery_offers WHERE delivery_id=? AND status='offered'").all(deliveryId);
+  assert.equal(offers.length, 1, 'only the chosen rider is offered the job first');
+  assert.equal(offers[0].rider_id, chosen.id, 'the offer must go to the chosen rider, not the nearest one');
+  assert.notEqual(offers[0].rider_id, other.id);
+});
+
+test('choosing a rider who is no longer available is rejected, never silently substituted', async () => {
+  const admin = await adminToken();
+  const rider = await register('rider');
+  await request(`/api/admin/riders/${rider.id}/approve`, { method: 'PUT', token: admin, body: { action: 'approve' } });
+  // Approved but never went online: not dispatchable.
+  const customer = await register('customer');
+  const created = await request('/api/deliveries', {
+    method: 'POST', token: customer.token,
+    body: deliveryBody({ preferred_rider_id: rider.id })
+  });
+  assert.equal(created.response.status, 409, 'an unavailable chosen rider is a conflict, not a silent swap');
+  assert.equal(created.json.code, 'rider_unavailable');
 });
 
 test('a zone created through the admin API is immediately priceable, not a dead end', async () => {

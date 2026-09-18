@@ -151,7 +151,9 @@ fun MapFirstSendScreen(
                         destination = draft.destination,
                         modifier = Modifier.fillMaxSize(),
                         discoveryActive = true,
-                        showPickupHalo = true
+                        showPickupHalo = true,
+                        nearbyRiders = snapshot.riders,
+                        selectedRiderId = snapshot.selectedRiderId
                     ) { point ->
                         draft = draft.copy(pickup = point)
                         quote = null
@@ -189,6 +191,14 @@ fun MapFirstSendScreen(
                         draft.pickup?.let { pickup ->
                             scope.launch { controller.scan(pickup, online) }
                         }
+                    },
+                    onSelectRider = { riderId ->
+                        controller.select(riderId)
+                        // The chosen rider travels with the draft so it survives a
+                        // process death mid-booking, exactly like the rest of the journey.
+                        val rider = controller.snapshot.value.riders.firstOrNull { it.id == riderId }
+                        draft = draft.copy(preferredRiderId = riderId, preferredRiderLabel = rider?.label)
+                        persist()
                     }
                 )
             }
@@ -323,6 +333,12 @@ fun MapFirstSendScreen(
                                     .put("dest_lat", destination.latitude).put("dest_lng", destination.longitude).put("dest_name", draft.receiverName)
                                     .put("dest_phone", draft.receiverPhone).put("item_description", draft.itemDescription)
                                     .put("special_instructions", draft.deliveryInstructions).put("payment_method", draft.paymentMethod)
+                                    .apply {
+                                        // Omitted entirely when the customer let MOVO choose, so
+                                        // automatic dispatch is unchanged for anyone who skipped
+                                        // the rider list.
+                                        draft.preferredRiderId?.let { put("preferred_rider_id", it) }
+                                    }
                                 api.post("/api/deliveries", body, creationKey).dataObject().optJSONObject("delivery")
                                     ?: throw IllegalStateException("Delivery response missing")
                             }.onSuccess { delivery ->

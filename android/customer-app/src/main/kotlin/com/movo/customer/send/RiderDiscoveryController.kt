@@ -2,6 +2,8 @@ package com.movo.customer.send
 
 import com.movo.customer.dataObject
 import com.movo.customer.model.Coordinate
+import com.movo.customer.model.NearbyRider
+import com.movo.customer.model.toNearbyRider
 import com.movo.customer.network.CustomerApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,9 +12,9 @@ import kotlinx.coroutines.flow.asStateFlow
 
 private const val MAX_ERROR_MESSAGE_LENGTH = 240
 
-/** Reports how many eligible riders MOVO can see near a pickup — never which ones (spec §12: blind dispatch). */
+/** Reports which riders MOVO can offer a pickup to, so the customer can choose one. */
 fun interface NearbyRiderSource {
-    suspend fun scan(pickup: Coordinate): Int
+    suspend fun scan(pickup: Coordinate): List<NearbyRider>
 }
 
 /** Thrown by a [NearbyRiderSource] when the backend reports the pickup has no service zone at all. */
@@ -34,6 +36,18 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
         }
     }
 
+    /**
+     * Records who the customer wants to send with. Selecting a rider is a preference
+     * dispatch honours first, not a lock — the backend still falls back to the nearest
+     * available rider if the chosen one declines or goes quiet, so nothing here can
+     * strand a parcel.
+     */
+    fun select(riderId: String?) {
+        synchronized(stateLock) {
+            mutableSnapshot.value = mutableSnapshot.value.withSelection(riderId)
+        }
+    }
+
     suspend fun scan(pickup: Coordinate, online: Boolean) {
         if (!pickup.isFinite) {
             invalidate(pickup)
@@ -52,11 +66,20 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
             if (inFlightPickup == pickup) return
             requestVersion += 1
             inFlightPickup = pickup
-            mutableSnapshot.value = DiscoverySnapshot(DiscoveryPhase.Scanning, pickup)
+            // A rescan must not silently forget who the customer chose. The previous
+            // list and choice ride along through the Scanning phase, and the choice is
+            // re-validated against the fresh results when they land.
+            val previous = mutableSnapshot.value
+            mutableSnapshot.value = DiscoverySnapshot(
+                phase = DiscoveryPhase.Scanning,
+                pickup = pickup,
+                riders = previous.riders,
+                selectedRiderId = previous.selectedRiderId
+            )
             requestVersion
         }
 
-        val count = try {
+        val riders = try {
             source.scan(pickup)
         } catch (error: Exception) {
             if (error is CancellationException) {
@@ -91,10 +114,16 @@ class RiderDiscoveryController(private val source: NearbyRiderSource) {
         synchronized(stateLock) {
             if (!isCurrentLocked(version, pickup)) return
             inFlightPickup = null
+            val previousSelection = mutableSnapshot.value.selectedRiderId
             mutableSnapshot.value = DiscoverySnapshot(
-                phase = if (count <= 0) DiscoveryPhase.NoRiders else DiscoveryPhase.Available,
+                phase = if (riders.isEmpty()) DiscoveryPhase.NoRiders else DiscoveryPhase.Available,
                 pickup = pickup,
-                riderCount = count.coerceAtLeast(0)
+                riderCount = riders.size,
+                riders = riders,
+                // A rider who is still around keeps the customer's choice; one who has
+                // gone offline drops the selection rather than leaving a stale pick
+                // attached to a rider who cannot be offered the job.
+                selectedRiderId = previousSelection?.takeIf { id -> riders.any { it.id == id } }
             )
         }
     }
@@ -115,5 +144,7 @@ fun customerNearbyRiderSource(api: CustomerApi, radiusKm: Int = 10): NearbyRider
         if (!data.optBoolean("in_service_area", true)) {
             throw OutOfServiceAreaException("MOVO is not currently available at this location.")
         }
-        data.optInt("rider_count", 0)
+        val list = data.optJSONArray("riders") ?: return@NearbyRiderSource emptyList()
+        (0 until list.length())
+            .mapNotNull { index -> list.optJSONObject(index)?.toNearbyRider()?.takeIf { it.id.isNotBlank() } }
     }

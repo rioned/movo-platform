@@ -39,6 +39,7 @@ class CustomerSession(context: Context) {
             .put("receiverName", draft.receiverName).put("receiverPhone", draft.receiverPhone)
             .put("itemType", draft.itemType).put("itemDescription", draft.itemDescription)
             .put("deliveryInstructions", draft.deliveryInstructions).put("paymentMethod", draft.paymentMethod)
+            .put("preferredRiderId", draft.preferredRiderId).put("preferredRiderLabel", draft.preferredRiderLabel)
             .put("quotePrice", journey.quote?.price).put("quoteDistance", journey.quote?.distanceKm)
             .put("quoteEta", journey.quote?.etaMinutes).put("deliveryId", journey.deliveryId)
             .put("creationIdempotencyKey", journey.creationIdempotencyKey)
@@ -56,7 +57,11 @@ class CustomerSession(context: Context) {
                 json.optString("pickupAddress"), json.optString("destinationAddress"), json.optString("senderName"),
                 json.optString("senderPhone"), json.optString("receiverName"), json.optString("receiverPhone"),
                 json.optString("itemType", "parcel"), json.optString("itemDescription"),
-                json.optString("deliveryInstructions"), json.optString("paymentMethod", "cash")
+                json.optString("deliveryInstructions"), json.optString("paymentMethod", "cash"),
+                // A journey restored from before rider choice existed simply has no
+                // preference, which is exactly the "let MOVO pick" behaviour it had.
+                json.optString("preferredRiderId").takeIf(String::isNotBlank),
+                json.optString("preferredRiderLabel").takeIf(String::isNotBlank)
             )
             val quote = if (json.isNull("quotePrice")) null else Quote(json.getDouble("quotePrice"), json.optDouble("quoteDistance"), json.optInt("quoteEta"))
             SendJourney(draft, quote, json.optString("deliveryId").takeIf(String::isNotBlank),
