@@ -28,6 +28,7 @@ class RiderLocationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var client: FusedLocationProviderClient
     private var lastSent: Location? = null
+    private var lastAcceptedElapsedMs = 0L
     private var heartbeat: Job? = null
     private var hasActiveWork = false
 
@@ -55,6 +56,7 @@ class RiderLocationService : Service() {
             stopSelf(); return START_NOT_STICKY
         }
         requestUpdates()
+        primeWithLastKnownLocation()
         startHeartbeat()
         return START_STICKY
     }
@@ -72,31 +74,76 @@ class RiderLocationService : Service() {
     }
 
     /**
+     * Publishes the OS's last known fix immediately on going online, instead of
+     * waiting for the first fresh callback. A cold GPS lock can take a minute or
+     * more; without this the rider is online but carries a stale (or absent)
+     * position on the backend for that whole window, which is exactly the state
+     * that makes dispatch skip them and the customer see no riders at all.
+     */
+    private fun primeWithLastKnownLocation() {
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        runCatching {
+            client.lastLocation.addOnSuccessListener { location ->
+                if (location != null && lastSent == null) maybeSend(location, force = true)
+            }
+        }
+    }
+
+    /**
      * Drops fixes too imprecise to trust outright, then dedupes ones that haven't
      * moved far enough from the last accepted point — a rider standing still with
      * a jittery GPS lock shouldn't spam the server (or the customer's live map)
      * with no-op updates. `force` (the heartbeat) bypasses both filters to resend
      * the last known-good fix so a stationary rider doesn't go stale.
+     *
+     * A coarse fix is never dropped outright when MOVO has nothing better: indoors
+     * or under Kigali cloud cover the first fixes come from the network provider at
+     * 100-500 m, and discarding those made the rider invisible to dispatch for as
+     * long as GPS took to lock — the customer saw "no riders nearby" while the
+     * rider's own app showed them online. A low-confidence position that reaches
+     * the backend still resolves to the right zone; silence resolves to nothing.
      */
     private fun maybeSend(location: Location, force: Boolean = false) {
-        if (!force && location.hasAccuracy() && location.accuracy > minAccuracyM) return
+        if (!force && !isAcceptable(location)) return
         val last = lastSent
         if (!force && last != null && location.distanceTo(last) < minDistanceM) return
         lastSent = location
+        lastAcceptedElapsedMs = android.os.SystemClock.elapsedRealtime()
         sendLocation(location)
+    }
+
+    /**
+     * Accuracy gate with a fallback: a fix inside [minAccuracyM] is always good, and
+     * a coarser one is accepted anyway once [COARSE_FIX_GRACE_MS] has passed since
+     * the last accepted fix (or since the service started with none at all), as long
+     * as it is inside [MAX_USABLE_ACCURACY_M]. That keeps precision high when GPS is
+     * healthy without ever letting the rider silently fall out of dispatch.
+     */
+    private fun isAcceptable(location: Location): Boolean {
+        if (!location.hasAccuracy()) return true
+        if (location.accuracy <= minAccuracyM) return true
+        if (location.accuracy > MAX_USABLE_ACCURACY_M) return false
+        val since = android.os.SystemClock.elapsedRealtime() - lastAcceptedElapsedMs
+        return lastSent == null || since >= COARSE_FIX_GRACE_MS
     }
 
     /**
      * Re-posts the last fix on a timer scaled to the same tier as live updates.
      * If the OS throttles updates for a stationary phone, MOVO still sees this
      * rider as live and keeps offering them work.
+     *
+     * When no fix has been accepted yet the heartbeat re-primes from the OS's last
+     * known location rather than idling: otherwise a rider whose first fixes were
+     * all rejected would never send anything at all, and the loop that was meant to
+     * keep them visible would be the thing keeping them invisible.
      */
     private fun startHeartbeat() {
         heartbeat?.cancel()
         heartbeat = scope.launch {
             while (isActive) {
                 delay(intervalMs * HEARTBEAT_MULTIPLIER)
-                lastSent?.let { maybeSend(it, force = true) }
+                val last = lastSent
+                if (last != null) maybeSend(last, force = true) else primeWithLastKnownLocation()
             }
         }
     }
@@ -166,5 +213,16 @@ class RiderLocationService : Service() {
         private const val DEFAULT_MIN_DISTANCE_M = 25f
         private const val DEFAULT_MIN_ACCURACY_M = 50f
         private const val HEARTBEAT_MULTIPLIER = 2L
+
+        /**
+         * Upper bound on a fix MOVO will still dispatch against. Network-provider
+         * fixes in Kigali land around 100-500 m, which is far tighter than a service
+         * zone, so they place the rider in the right zone even though they are too
+         * coarse to draw a live route with.
+         */
+        private const val MAX_USABLE_ACCURACY_M = 1_000f
+
+        /** How long to hold out for a precise fix before accepting a coarse one. */
+        private const val COARSE_FIX_GRACE_MS = 20_000L
     }
 }

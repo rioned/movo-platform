@@ -435,7 +435,17 @@ for (const migration of [
   // traceable record of when a service area moved (spec: zone management §50).
   "ALTER TABLE delivery_zones ADD COLUMN boundary_geojson TEXT",
   "ALTER TABLE delivery_zones ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
-  "ALTER TABLE delivery_zones ADD COLUMN geometry_updated_at TEXT"
+  "ALTER TABLE delivery_zones ADD COLUMN geometry_updated_at TEXT",
+  // Zone-at-ingest: every position MOVO receives is resolved to a service zone the
+  // moment it arrives, instead of being re-derived at quote/dispatch time. Storing
+  // the resolved zone on the rider row makes "which riders serve this pickup" a
+  // zone lookup first and a distance check second, and makes an out-of-area rider
+  // visible to operations rather than silently undispatchable.
+  "ALTER TABLE riders ADD COLUMN current_zone_id TEXT",
+  "ALTER TABLE riders ADD COLUMN current_zone_name TEXT",
+  "ALTER TABLE riders ADD COLUMN last_location_accuracy REAL",
+  "ALTER TABLE rider_locations ADD COLUMN zone_id TEXT",
+  "ALTER TABLE rider_locations ADD COLUMN accuracy REAL"
 ]) {
   try { db.exec(migration); } catch (error) {
     if (!String(error.message).includes('duplicate column name')) throw error;
@@ -897,6 +907,37 @@ function findZone(lat, lng) {
 }
 
 /**
+ * Resolves a coordinate to its zone at the moment MOVO receives it, rather than
+ * re-deriving it later at quote or dispatch time. Returns a compact descriptor
+ * that is safe to persist on the rider row and to hand back to a client.
+ *
+ * `null` zone still means "outside every service area" — the caller decides what
+ * that implies (a rider parked outside all zones is kept visible to operations
+ * but is not offered work for a pickup in a zone they don't serve).
+ */
+function resolveZoneAt(lat, lng) {
+  const zone = findZone(lat, lng);
+  return {
+    zone,
+    id: zone ? zone.id : null,
+    name: zone ? zone.name : null,
+    in_service_area: Boolean(zone)
+  };
+}
+
+/**
+ * Proximity between two points that already carry a resolved zone. Riders in the
+ * pickup's own zone are the natural candidates, so they sort ahead of everyone
+ * else regardless of raw straight-line distance — a rider 2 km away across a zone
+ * boundary is a worse match than one 3 km away inside the zone the price was
+ * quoted for.
+ */
+function zoneAwareRank(riderZoneId, pickupZoneId, distanceKm) {
+  const sameZone = Boolean(pickupZoneId) && riderZoneId === pickupZoneId;
+  return { same_zone: sameZone, rank: (sameZone ? 0 : 1) * 1e6 + distanceKm };
+}
+
+/**
  * Returns a price breakdown, or { error } when the route can't be priced —
  * either because a coordinate is outside every service zone, or because the
  * zone pair itself has no active commercial pricing configured yet.
@@ -1085,9 +1126,10 @@ function updateRideStatus(id, status, extra = {}) {
 
 function eligibleNearbyDrivers(lat, lng, radiusKm) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
+  const pickupZoneId = resolveZoneAt(lat, lng).id;
   const drivers = db.prepare(`SELECT u.id,u.full_name,u.avatar,r.avg_rating,r.rating_count,r.vehicle_type,
       r.car_make,r.car_model,r.car_color,r.car_plate,r.motorcycle_plate,
-      r.current_lat,r.current_lng,r.last_location_update,
+      r.current_lat,r.current_lng,r.current_zone_id,r.current_zone_name,r.last_location_update,
       (SELECT COUNT(*) FROM deliveries d WHERE d.rider_id=r.user_id AND d.status NOT IN ('delivered','cancelled','failed')) AS active_deliveries,
       (SELECT COUNT(*) FROM rides ri WHERE ri.driver_id=r.user_id AND ri.status NOT IN ('completed','cancelled')) AS active_rides
     FROM users u JOIN riders r ON r.user_id=u.id
@@ -1097,10 +1139,14 @@ function eligibleNearbyDrivers(lat, lng, radiusKm) {
     .all(`-${freshnessSeconds} seconds`);
   return drivers
     .filter(driver => driver.active_deliveries === 0 && driver.active_rides === 0)
-    .map(driver => ({ ...driver, distance_km: Math.round(haversine(lat, lng, driver.current_lat, driver.current_lng) * 100) / 100 }))
-    .filter(driver => driver.distance_km <= radiusKm)
-    .sort((a, b) => a.distance_km - b.distance_km)
-    .map(({ active_deliveries, active_rides, ...driver }) => driver);
+    .map(driver => {
+      const distance_km = Math.round(haversine(lat, lng, driver.current_lat, driver.current_lng) * 100) / 100;
+      const { same_zone, rank } = zoneAwareRank(driver.current_zone_id, pickupZoneId, distance_km);
+      return { ...driver, distance_km, same_zone, rank };
+    })
+    .filter(driver => driver.same_zone || driver.distance_km <= radiusKm)
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ active_deliveries, active_rides, rank, ...driver }) => driver);
 }
 
 function canAccessRide(user, ride) {
@@ -1528,14 +1574,22 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   const accuracy = req.body.accuracy === undefined ? null : Number(req.body.accuracy);
   const rider = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(req.user.id);
   if (!rider || rider.approval_status !== 'approved' || !['online','busy'].includes(rider.online_status)) return resErr(res, 'Approved online rider required', 403);
-  db.prepare('UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime(\'now\') WHERE user_id=?')
-    .run(lat, lng, req.user.id);
+  // Zone is resolved here, at ingest, so dispatch and proximity never have to
+  // recompute it per candidate rider (spec §12: zone-based blind dispatch).
+  const zone = resolveZoneAt(Number(lat), Number(lng));
+  db.prepare('UPDATE riders SET current_lat=?,current_lng=?,current_zone_id=?,current_zone_name=?,last_location_accuracy=?,last_location_update=datetime(\'now\') WHERE user_id=?')
+    .run(lat, lng, zone.id, zone.name, Number.isFinite(accuracy) ? accuracy : null, req.user.id);
   const activeDelivery = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
   const activeRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
-  db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng) VALUES (?,?,?,?,?,?)').run(uuidv4(), req.user.id, activeDelivery?.id || null, activeRide?.id || null, lat, lng);
+  db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng,zone_id,accuracy) VALUES (?,?,?,?,?,?,?,?)')
+    .run(uuidv4(), req.user.id, activeDelivery?.id || null, activeRide?.id || null, lat, lng, zone.id, Number.isFinite(accuracy) ? accuracy : null);
   if (activeDelivery) io.to(`delivery:${activeDelivery.id}`).emit('rider_location', { delivery_id: activeDelivery.id, lat: Number(lat), lng: Number(lng) });
   if (activeRide) io.to(`ride:${activeRide.id}`).emit('driver_location', { ride_id: activeRide.id, lat: Number(lat), lng: Number(lng) });
-  resOK(res, { message: 'Location updated', tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide)) });
+  resOK(res, {
+    message: 'Location updated',
+    zone: { id: zone.id, name: zone.name, in_service_area: zone.in_service_area },
+    tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide))
+  });
 });
 
 app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
@@ -1741,8 +1795,9 @@ function customerDeliveries(user) {
 
 function eligibleNearbyRiders(lat, lng, radiusKm) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
+  const pickupZoneId = resolveZoneAt(lat, lng).id;
   const riders = db.prepare(`SELECT u.id,u.full_name,r.avg_rating,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,
-    r.current_lat,r.current_lng,r.last_location_update,
+    r.current_lat,r.current_lng,r.current_zone_id,r.current_zone_name,r.last_location_update,
     (SELECT COUNT(*) FROM deliveries d WHERE d.rider_id=r.user_id AND d.status NOT IN ('delivered','cancelled','failed')) AS active_count
     FROM users u JOIN riders r ON r.user_id=u.id
     WHERE u.status='active' AND r.approval_status='approved' AND r.online_status='online'
@@ -1751,10 +1806,16 @@ function eligibleNearbyRiders(lat, lng, radiusKm) {
     .all(`-${freshnessSeconds} seconds`);
   return riders
     .filter(rider => rider.active_count === 0)
-    .map(rider => ({ ...rider, distance_km: Math.round(haversine(lat, lng, rider.current_lat, rider.current_lng) * 100) / 100 }))
-    .filter(rider => rider.distance_km <= radiusKm)
-    .sort((a, b) => a.distance_km - b.distance_km)
-    .map(({ active_count, ...rider }) => rider);
+    .map(rider => {
+      const distance_km = Math.round(haversine(lat, lng, rider.current_lat, rider.current_lng) * 100) / 100;
+      // The zone was resolved when this rider's position arrived, so matching is a
+      // zone comparison first and a radius check only as the tie-breaker.
+      const { same_zone, rank } = zoneAwareRank(rider.current_zone_id, pickupZoneId, distance_km);
+      return { ...rider, distance_km, same_zone, rank };
+    })
+    .filter(rider => rider.same_zone || rider.distance_km <= radiusKm)
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ active_count, rank, ...rider }) => rider);
 }
 
 app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (req, res) => {
@@ -1769,11 +1830,17 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
   // §12), not later at quote time — otherwise "no riders nearby" and "MOVO
   // doesn't operate here at all" look identical to the client.
   const zone = findZone(lat, lng);
+  const riders = eligibleNearbyRiders(lat, lng, radiusKm);
   // Dispatch is blind and zone-based (spec §12): a customer learns whether riders
   // are around at all, never which ones, so there's nothing here to browse or
   // solicit by name ahead of assignment — see the rider-selection decision record.
   resOK(res, {
-    rider_count: eligibleNearbyRiders(lat, lng, radiusKm).length, radius_km: radiusKm,
+    rider_count: riders.length,
+    // Riders already inside the pickup's own zone are the ones dispatch will reach
+    // first; surfacing the split lets the app explain a thin-but-nonzero result.
+    in_zone_rider_count: riders.filter(rider => rider.same_zone).length,
+    nearest_km: riders.length ? riders[0].distance_km : null,
+    radius_km: radiusKm,
     in_service_area: Boolean(zone), zone: zone ? { id: zone.id, name: zone.name } : null,
     serverTime: new Date().toISOString()
   });
@@ -2895,6 +2962,36 @@ app.get('/api/admin/zones', auth, roleAuth('admin'), (req, res) => {
   resOK(res, db.prepare('SELECT * FROM delivery_zones ORDER BY sort_order').all());
 });
 
+/**
+ * Builds the zone-to-zone pricing rows a newly created zone needs, in both
+ * directions, against every other zone (and itself). Without these a brand-new
+ * zone resolves fine but every quote touching it fails `route_unsupported`, which
+ * surfaces to the customer as the same dead end as "no riders" — so zone creation
+ * is not complete until its commercial matrix exists.
+ */
+function seedZonePricing(zoneId) {
+  const zone = db.prepare('SELECT * FROM delivery_zones WHERE id=?').get(zoneId);
+  if (!zone) return 0;
+  const others = db.prepare('SELECT * FROM delivery_zones').all();
+  const insert = db.prepare(`INSERT INTO zone_pricing (id,origin_zone_id,dest_zone_id,parcel_price,document_price,estimated_min)
+    VALUES (?,?,?,?,?,?)`);
+  const exists = db.prepare('SELECT id FROM zone_pricing WHERE origin_zone_id=? AND dest_zone_id=?');
+  let created = 0;
+  const pair = (origin, dest) => {
+    if (exists.get(origin.id, dest.id)) return;
+    const dist = haversine(origin.center_lat, origin.center_lng, dest.center_lat, dest.center_lng);
+    insert.run(
+      uuidv4(), origin.id, dest.id,
+      Math.round(origin.base_price_parcel + dist * origin.per_km_rate),
+      Math.round(origin.base_price_document + dist * origin.per_km_rate),
+      Math.round(10 + dist * 3)
+    );
+    created += 1;
+  };
+  for (const other of others) { pair(zone, other); pair(other, zone); }
+  return created;
+}
+
 app.post('/api/admin/zones', auth, roleAuth('admin'), route((req, res) => {
   const { name, center_lat, center_lng, radius_km, base_price_parcel, base_price_document, per_km_rate, sort_order, boundary_geojson } = req.body;
   if (!name || !center_lat || !center_lng) return resErr(res, 'Name and coordinates required');
@@ -2905,8 +3002,9 @@ app.post('/api/admin/zones', auth, roleAuth('admin'), route((req, res) => {
     (id,name,center_lat,center_lng,radius_km,base_price_parcel,base_price_document,per_km_rate,sort_order,boundary_geojson,geometry_updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`)
     .run(id, name, center_lat, center_lng, radius_km||3, base_price_parcel||1500, base_price_document||1000, per_km_rate||200, sort_order||0, boundary);
-  audit(req.user.id, 'zone_created', 'zone', id, { name, boundary: Boolean(boundary) });
-  resOK(res, { id, message: 'Zone created' }, 201);
+  const pricingRows = seedZonePricing(id);
+  audit(req.user.id, 'zone_created', 'zone', id, { name, boundary: Boolean(boundary), pricing_rows: pricingRows });
+  resOK(res, { id, message: 'Zone created', pricing_rows: pricingRows }, 201);
 }));
 
 // A zone's geometry (its center/radius or drawn boundary) drives every price quote

@@ -377,3 +377,66 @@ test('nearby-riders reports in_service_area so the client can distinguish "no ri
   assert.equal(outOfArea.json.data.zone, null);
   assert.equal(outOfArea.json.data.rider_count, 0);
 });
+
+test('a rider location is resolved to its zone at ingest, and that zone drives discovery', async () => {
+  // The customer-facing bug this covers: a rider can be approved, online and
+  // sending GPS, yet still be invisible at a pickup metres away. Resolving the
+  // zone when the position arrives (rather than re-deriving it per candidate at
+  // dispatch time) is what makes "riders near this pickup" answerable at all.
+  const admin = await adminToken();
+  const rider = await onlineRider(admin);
+
+  const posted = await request('/api/rider/location', {
+    method: 'PUT', token: rider.token, body: { lat: PICKUP.lat, lng: PICKUP.lng, accuracy: 180 }
+  });
+  assert.equal(posted.response.status, 200, posted.json.error);
+  assert.equal(posted.json.data.zone.in_service_area, true, 'ingest must tell the rider which zone they are serving');
+  assert.ok(posted.json.data.zone.name, 'the resolved zone name belongs in the ingest response');
+
+  // Persisted on the rider row, so dispatch reads it instead of recomputing it.
+  const stored = db.prepare('SELECT current_zone_id, current_zone_name, last_location_accuracy FROM riders WHERE user_id=?').get(rider.id);
+  assert.ok(stored.current_zone_id, 'the resolved zone must be persisted at ingest');
+  assert.equal(stored.current_zone_name, posted.json.data.zone.name);
+  assert.equal(stored.last_location_accuracy, 180, 'fix accuracy is retained for operations triage');
+
+  // A coarse fix (the exact case the Android accuracy gate used to silently drop)
+  // must still make the rider discoverable to a customer standing at that pickup.
+  const customer = await register('customer');
+  const nearby = await request(`/api/mobile/v1/customer/nearby-riders?lat=${PICKUP.lat}&lng=${PICKUP.lng}&radius_km=5`, { token: customer.token });
+  assert.equal(nearby.response.status, 200, nearby.json.error);
+  assert.ok(nearby.json.data.rider_count >= 1, 'an online rider inside the pickup zone must be discoverable');
+  assert.ok(nearby.json.data.in_zone_rider_count >= 1, 'the rider shares the pickup zone, so they must count as in-zone');
+  assert.equal(typeof nearby.json.data.nearest_km, 'number');
+  assert.equal(nearby.json.data.riders, undefined, 'blind dispatch: still no individually identified riders');
+});
+
+test('a zone created through the admin API is immediately priceable, not a dead end', async () => {
+  // Creating a zone used to insert only the geometry, leaving zone_pricing empty
+  // for every pair touching it. The zone then resolved correctly but every quote
+  // failed route_unsupported, which reaches the customer as the same dead end as
+  // having no riders at all.
+  const admin = await adminToken();
+  const created = await request('/api/admin/zones', {
+    method: 'POST', token: admin,
+    body: {
+      name: 'Regression Test Zone', center_lat: -1.9478, center_lng: 30.0592,
+      radius_km: 4, base_price_parcel: 1500, base_price_document: 1000, per_km_rate: 200
+    }
+  });
+  assert.equal(created.response.status, 201, created.json.error);
+  assert.ok(created.json.data.pricing_rows > 0, 'zone creation must seed its commercial matrix');
+
+  const zoneId = created.json.data.id;
+  const outbound = db.prepare('SELECT COUNT(*) AS c FROM zone_pricing WHERE origin_zone_id=?').get(zoneId).c;
+  const inbound = db.prepare('SELECT COUNT(*) AS c FROM zone_pricing WHERE dest_zone_id=?').get(zoneId).c;
+  assert.ok(outbound > 1 && inbound > 1, 'pricing must exist in both directions against the other zones');
+
+  // And the quote that would previously have failed now succeeds.
+  const customer = await register('customer');
+  const priced = await request('/api/deliveries/price', {
+    method: 'POST', token: customer.token,
+    body: { pickup_lat: -1.9478, pickup_lng: 30.0592, dest_lat: DEST.lat, dest_lng: DEST.lng, service_type: 'parcel' }
+  });
+  assert.equal(priced.response.status, 200, priced.json.error);
+  assert.ok(priced.json.data.customerPrice > 0);
+});

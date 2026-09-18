@@ -86,6 +86,28 @@ test('a stationary online rider keeps reporting location and stays discoverable,
   assert.match(service, /if \(!force/, 'distance/accuracy filters must be skippable by the forced heartbeat resend');
 });
 
+test('a rider with only a coarse network fix still reaches dispatch instead of going invisible', () => {
+  // Regression: the accuracy gate dropped every fix coarser than min_accuracy_m
+  // (50 m). On a phone that had not yet achieved a GPS lock — indoors, or under
+  // cloud — the only fixes available came from the network provider at 100-500 m,
+  // so NOTHING was ever sent. The rider showed "online" in their own app while the
+  // server kept a location hours old, aged them out of the freshness window, and
+  // every customer at that pickup saw "No riders near this pickup".
+  const service = source('RiderLocationService.kt', [
+    /MAX_USABLE_ACCURACY_M/, /COARSE_FIX_GRACE_MS/, /primeWithLastKnownLocation/, /lastAcceptedElapsedMs/
+  ]);
+  assert.match(service, /private fun isAcceptable\(/, 'the accuracy gate must be an explicit, testable decision');
+  assert.doesNotMatch(
+    service,
+    /if \(!force && location\.hasAccuracy\(\) && location\.accuracy > minAccuracyM\) return/,
+    'a coarse fix must never be discarded unconditionally — that hides the rider from dispatch'
+  );
+  // Going online must publish a position immediately rather than waiting for a
+  // cold GPS lock, and the heartbeat must recover when no fix was ever accepted.
+  assert.match(service, /requestUpdates\(\)\s*\n\s*primeWithLastKnownLocation\(\)/, 'going online must prime from the last known fix');
+  assert.match(service, /else primeWithLastKnownLocation\(\)/, 'the heartbeat must re-prime when nothing has been sent yet');
+});
+
 test('the rider map defers framing until layout instead of blocking the UI thread', () => {
   source('RiderMap.kt', [/width <= 0 \|\| height <= 0/, /post\(apply\)/, /infoWindow = null/]);
 });
