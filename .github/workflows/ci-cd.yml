@@ -27,9 +27,22 @@ jobs:
       - run: npm run test:syntax
       - run: npm test
 
+  backup:
+    name: Pre-deploy snapshot
+    needs: test
+    # Runs BEFORE the canary, not after: the point of this snapshot is to be the
+    # restore point from moments before new code touches the database. A backup
+    # taken after a bad migration has already recorded the damage.
+    # `deploy` gates on it, so a failed or unverifiable snapshot stops the
+    # release — production is never changed without a proven way back.
+    uses: ./.github/workflows/backup.yml
+    secrets: inherit
+    with:
+      reason: predeploy-${{ github.sha }}
+
   deploy:
     name: Deploy (20% canary → auto-promote or auto-rollback)
-    needs: test
+    needs: [test, backup]
     runs-on: ubuntu-latest
     # Backend-only changes trigger a deploy. Android app changes are built by
     # this same workflow's test job but are not auto-shipped to a store —
