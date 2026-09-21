@@ -1,0 +1,131 @@
+name: Backup
+
+# Snapshots production and pushes it to the PRIVATE DR repo.
+#
+# Called by ci-cd.yml before every deploy (so there is always a restore point
+# taken moments before new code touches the database), and independently on a
+# nightly schedule so the snapshot does not go stale between releases.
+
+on:
+  workflow_call:
+    inputs:
+      reason:
+        type: string
+        required: false
+        default: manual
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        type: string
+        required: false
+        default: manual
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backup
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    name: Snapshot production → DR repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull snapshot from VPS
+        env:
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          REASON: ${{ inputs.reason || 'scheduled' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Same forced-command key the deploy step uses. The wrapper's `backup`
+          # verb writes the archive to stdout and all logging to stderr, so this
+          # redirect captures the payload and nothing else.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@"$VPS_HOST" \
+            "backup $REASON" > snapshot.tar.gz
+
+          test -s snapshot.tar.gz
+          echo "received $(du -h snapshot.tar.gz | cut -f1)"
+
+      - name: Verify it actually restores
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3
+
+          mkdir -p snap && tar xzf snapshot.tar.gz -C snap
+          cat snap/SNAPSHOT_INFO
+
+          # Opening the database replays the WAL; integrity_check then proves the
+          # result is coherent. A snapshot that fails here must never reach the
+          # DR repo, and must never let a deploy proceed behind it.
+          T=$(mktemp -d)
+          tar xzf snap/movo-db.tar.gz -C "$T"
+          RESULT=$(sqlite3 "$T/movo.db" 'PRAGMA integrity_check;')
+          [ "$RESULT" = "ok" ] || { echo "::error::integrity_check failed: $RESULT"; exit 1; }
+
+          TABLES=$(sqlite3 "$T/movo.db" "SELECT count(*) FROM sqlite_master WHERE type='table';")
+          [ "$TABLES" -ge 20 ] || { echo "::error::only $TABLES tables, expected >= 20"; exit 1; }
+
+          tar tzf snap/uploads.tar.gz > /dev/null
+          grep -q '^JWT_SECRET=.\+' snap/env.backup \
+            || { echo "::error::env.backup is missing JWT_SECRET"; exit 1; }
+
+          echo "verified: $TABLES tables, integrity ok"
+
+      - name: Push to private DR repo
+        env:
+          DR_KEY: ${{ secrets.DR_REPO_KEY }}
+          REASON: ${{ inputs.reason || 'scheduled' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$DR_KEY" > ~/.ssh/dr_key
+          chmod 600 ~/.ssh/dr_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/dr_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+          git clone -q git@github.com:rioned/movo-platform-dr.git dr
+
+          # Overwrite one fixed path instead of adding a timestamped directory.
+          # These archives are ~1.8MB of incompressible gzip and git stores every
+          # version forever, so nightly stamped snapshots would add roughly
+          # 650MB/year to the repo. History still holds each version for
+          # point-in-time recovery; only the working tree stays small.
+          rm -rf dr/backups/latest
+          mkdir -p dr/backups/latest
+          cp snap/movo-db.tar.gz snap/uploads.tar.gz snap/env.backup \
+             snap/Caddyfile snap/deploy-state snap/SNAPSHOT_INFO dr/backups/latest/
+          echo latest > dr/backups/LATEST
+
+          # Keep pinned infra matching what is actually running, so restore.sh
+          # rebuilds the deployed commit rather than whatever was pinned last.
+          cp snap/deploy-state dr/infra/.deploy-state
+          cp snap/Caddyfile    dr/infra/Caddyfile
+
+          cd dr
+          git config user.email "actions@github.com"
+          git config user.name  "movo ci"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "production unchanged since last snapshot — nothing to commit"
+            exit 0
+          fi
+
+          STAMP=$(sed -n 's/^stamp=//p' backups/latest/SNAPSHOT_INFO)
+          SHA=$(sed -n 's/^deployed_sha=//p' backups/latest/SNAPSHOT_INFO)
+          git commit -q -m "backup $STAMP ($REASON)" -m "deployed_sha=$SHA"
+          git pull -q --rebase origin main
+          git push -q origin main
+          echo "pushed $STAMP"
+
+      - name: Scrub credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/dr_key
