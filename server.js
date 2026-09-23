@@ -36,7 +36,10 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const logger = createLogger({ level: runtime.logLevel, service: 'movo-api' });
 const metrics = createMetrics();
 const { createMessaging } = require('./src/services/messaging');
-const messaging = createMessaging({ provider: runtime.providers.sms, logger });
+const messaging = createMessaging({ provider: runtime.providers.sms, logger, twilio: runtime.twilio });
+if (runtime.production && runtime.providers.sms === 'sandbox') {
+  logger.warn('sms_sandbox_in_production', { message: 'SMS_PROVIDER=sandbox: verification codes are not delivered. Set SMS_PROVIDER=twilio with TWILIO_* credentials.' });
+}
 const { createPayoutProvider } = require('./src/services/payouts');
 const payoutProvider = createPayoutProvider({ provider: runtime.providers.payout, logger });
 const { createGeocodingService } = require('./src/services/geocoding');
@@ -661,6 +664,9 @@ function seedData() {
       ['platform_fee_percent','20'],['min_ride_price','800'],['cancel_fee_customer',500],
       ['cancel_fee_rider',0],['waiting_fee_per_min',100],['max_waiting_free_min',5],
       ['rider_accept_timeout_sec',30],['rider_search_radius_km',5],['rider_search_expand_km',2],
+      // How many zones outward dispatch may walk when the pickup's own zone has no
+      // free rider: 0 = own zone only, 3 = own zone plus the three nearest others.
+      ['rider_search_max_zone_depth','3'],
       ['currency','RWF'],['currency_symbol','FRW'],
       // Rider location tracking cadence (spec §13.6): tighter while a delivery/ride is
       // active, looser while the rider is just available and idle, so idle phones aren't
@@ -846,8 +852,18 @@ function financialFieldsFor(user, delivery) {
   return { customer_price: fields.customer_price, total_charge: fields.total_charge };
 }
 
+// The handover codes are the recipient's proof that the rider actually showed up,
+// so the rider must obtain them from the sender/recipient in person, never the API.
+function riderDeliveryView(delivery) {
+  if (!delivery) return delivery;
+  const { pickup_otp, delivery_otp, ...view } = delivery;
+  return view;
+}
+
 function deliveryView(user, delivery) {
-  return user.role === 'customer' ? customerDeliveryView(user, delivery) : delivery;
+  if (user.role === 'customer') return customerDeliveryView(user, delivery);
+  if (user.role === 'rider') return riderDeliveryView(delivery);
+  return delivery;
 }
 
 function stableJson(value) {
@@ -872,13 +888,22 @@ function pointInRing(lat, lng, ring) {
 }
 
 /**
- * A point is in a zone's service area if it falls inside the zone's drawn
- * boundary (preferred, when the admin has published one) or, for zones that
- * still only have a center point, within its service radius. Zones are never
- * assumed to cover a point just because they are the closest one — a point
- * outside every configured zone is outside MOVO's service area, full stop.
+ * How well a point fits a zone's service area, or null when it falls outside it.
+ * Lower is a better fit.
+ *
+ * A drawn boundary always wins over a circular radius (score -1): an admin who
+ * published a polygon has stated the ground truth for that area. Among circular
+ * zones the point belongs to the one it sits *deepest* inside, measured as its
+ * distance from the center as a fraction of the radius, so a point 100 m into a
+ * 5 km zone does not outrank the 2 km zone it sits at the heart of.
+ *
+ * This ordering is the whole reason overlapping zones resolve correctly. The
+ * seeded Kigali zones overlap in 26 of their 45 pairs, and picking simply the
+ * first match by `sort_order` handed 6 of the 10 zone centers to a neighbour
+ * (Masaka's own center resolved to Kicukiro), which then mispriced the route and
+ * pointed dispatch at the wrong pool of riders.
  */
-function pointInZone(lat, lng, zone) {
+function zoneMatchScore(lat, lng, zone) {
   if (zone.boundary_geojson) {
     let geom;
     try { geom = JSON.parse(zone.boundary_geojson); } catch { geom = null; }
@@ -886,12 +911,20 @@ function pointInZone(lat, lng, zone) {
       const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
       for (const poly of polygons) {
         const outerRing = poly && poly[0];
-        if (Array.isArray(outerRing) && pointInRing(lat, lng, outerRing)) return true;
+        if (Array.isArray(outerRing) && pointInRing(lat, lng, outerRing)) return -1;
       }
-      return false;
+      return null;
     }
   }
-  return haversine(lat, lng, zone.center_lat, zone.center_lng) <= zone.radius_km;
+  const radius = Number(zone.radius_km);
+  if (!Number.isFinite(radius) || radius < 0) return null;
+  const distance = haversine(lat, lng, zone.center_lat, zone.center_lng);
+  if (distance > radius) return null;
+  return radius > 0 ? distance / radius : 0;
+}
+
+function pointInZone(lat, lng, zone) {
+  return zoneMatchScore(lat, lng, zone) !== null;
 }
 
 /**
@@ -900,10 +933,191 @@ function pointInZone(lat, lng, zone) {
  * mapping an out-of-area point to the closest zone would let customers create
  * deliveries anywhere on the map and would misprice/misdispatch them. Callers
  * must treat null as "MOVO is not currently available at this location."
+ *
+ * Where zones overlap the best-fitting one wins (see zoneMatchScore); ties are
+ * broken by `sort_order` so the same coordinate always resolves to the same zone.
+ *
+ * `zones` may be a pre-loaded active-zone list, so a caller ranking a whole
+ * candidate pool reads the table once instead of once per rider.
  */
-function findZone(lat, lng) {
-  const zones = db.prepare('SELECT * FROM delivery_zones WHERE is_active=1 ORDER BY sort_order').all();
-  return zones.find(z => pointInZone(lat, lng, z)) || null;
+function activeZones() {
+  return db.prepare('SELECT * FROM delivery_zones WHERE is_active=1 ORDER BY sort_order').all();
+}
+
+function findZone(lat, lng, zones = null) {
+  let best = null;
+  let bestScore = Infinity;
+  for (const zone of (zones || activeZones())) {
+    const score = zoneMatchScore(lat, lng, zone);
+    if (score === null || score >= bestScore) continue;
+    best = zone;
+    bestScore = score;
+  }
+  return best;
+}
+
+/**
+ * The zone a candidate rider is actually standing in.
+ *
+ * `current_zone_id` is a cache written at location ingest, and a NULL there means
+ * "never resolved" — not "outside every service area". Rider rows that predate the
+ * zone columns, or that were written by an import, carry NULL until their next GPS
+ * ping, and treating that as out-of-area would silently make every one of them
+ * undispatchable. So NULL falls back to resolving the stored coordinates; only a
+ * rider whose position genuinely resolves to no zone is out of the service area.
+ */
+function riderZoneId(rider, zones) {
+  if (rider.current_zone_id) return rider.current_zone_id;
+  if (!Number.isFinite(rider.current_lat) || !Number.isFinite(rider.current_lng)) return null;
+  return findZone(rider.current_lat, rider.current_lng, zones)?.id || null;
+}
+
+/**
+ * Distance in km from a point to a line segment, on a local flat-earth projection
+ * centred on the point. Over the few-kilometre spans a service-area edge covers,
+ * the projection error is far below the precision dispatch needs, and it lets us
+ * use exact point-to-segment geometry instead of sampling vertices.
+ */
+function distanceToSegmentKm(lat, lng, aLat, aLng, bLat, bLng) {
+  const latScale = 110.574;
+  const lngScale = 111.320 * Math.cos(lat * Math.PI / 180);
+  const px = 0, py = 0;
+  const ax = (aLng - lng) * lngScale, ay = (aLat - lat) * latScale;
+  const bx = (bLng - lng) * lngScale, by = (bLat - lat) * latScale;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  // Degenerate segment (repeated vertex): fall back to the point distance.
+  if (lenSq === 0) return Math.hypot(ax - px, ay - py);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(ax + t * dx - px, ay + t * dy - py);
+}
+
+/**
+ * Straight-line distance from a point to a zone's service area — 0 when the
+ * point is inside it. Polygon zones are measured to their nearest *edge*, circular
+ * zones to the edge of their radius.
+ *
+ * Measuring to the nearest vertex instead would badly overstate the distance for
+ * the long edges real admin-drawn boundaries have: a rider 550 m outside the middle
+ * of an 11 km-wide zone edge measures 5.6 km from its nearest corner — a 10x error,
+ * enough to rank that zone behind zones that are genuinely farther away and so send
+ * dispatch to the wrong neighbour.
+ */
+function distanceToZone(lat, lng, zone) {
+  if (zoneMatchScore(lat, lng, zone) !== null) return 0;
+  if (zone.boundary_geojson) {
+    let geom;
+    try { geom = JSON.parse(zone.boundary_geojson); } catch { geom = null; }
+    if (geom) {
+      const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+      let nearest = Infinity;
+      for (const poly of polygons || []) {
+        for (const ring of poly || []) {
+          if (!Array.isArray(ring) || ring.length < 2) continue;
+          for (let i = 0; i < ring.length - 1; i += 1) {
+            const a = ring[i];
+            const b = ring[i + 1];
+            if (!Array.isArray(a) || a.length < 2 || !Array.isArray(b) || b.length < 2) continue;
+            nearest = Math.min(nearest, distanceToSegmentKm(lat, lng, a[1], a[0], b[1], b[0]));
+          }
+          // Close an open ring so the final edge is measured too.
+          const first = ring[0];
+          const last = ring[ring.length - 1];
+          if (Array.isArray(first) && Array.isArray(last) && (first[0] !== last[0] || first[1] !== last[1])) {
+            nearest = Math.min(nearest, distanceToSegmentKm(lat, lng, last[1], last[0], first[1], first[0]));
+          }
+        }
+      }
+      if (Number.isFinite(nearest)) return nearest;
+    }
+  }
+  return Math.max(0, haversine(lat, lng, zone.center_lat, zone.center_lng) - (Number(zone.radius_km) || 0));
+}
+
+/**
+ * Orders every active zone by how near it is to a pickup point: index 0 is the
+ * pickup's own zone, index 1 the next nearest service area, and so on.
+ *
+ * This is what makes rider search "everyone in the pickup's zone first, then the
+ * next zone over" instead of a flat radius sweep, which treats a rider sitting
+ * across a river in an unrelated zone exactly like the one in the neighbouring
+ * suburb. The pickup's own zone is pinned to the front because overlapping zones
+ * all measure 0 km from a point they contain.
+ */
+function zoneSearchOrder(lat, lng, pickupZoneId) {
+  const zones = activeZones();
+  const ranked = zones
+    .map(zone => ({
+      id: zone.id,
+      name: zone.name,
+      sort_order: Number(zone.sort_order) || 0,
+      distance_km: zone.id === pickupZoneId ? -1 : distanceToZone(lat, lng, zone)
+    }))
+    .sort((a, b) => a.distance_km - b.distance_km || a.sort_order - b.sort_order);
+  const rankById = new Map();
+  ranked.forEach((zone, index) => rankById.set(zone.id, index));
+  // Riders sitting outside every service area rank behind every zoned rider.
+  return { zones, ranked, rankById, outOfZoneRank: ranked.length };
+}
+
+/**
+ * Re-resolves the cached zone on every rider row. A rider's zone is resolved once,
+ * when their position arrives, so a zone whose geometry moved (or was deactivated)
+ * would otherwise keep dispatching against the old map until each rider's next GPS
+ * ping. Called after an admin changes the zone layout.
+ */
+function refreshRiderZones() {
+  const riders = db.prepare('SELECT user_id,current_lat,current_lng FROM riders WHERE current_lat IS NOT NULL AND current_lng IS NOT NULL').all();
+  const update = db.prepare('UPDATE riders SET current_zone_id=?,current_zone_name=? WHERE user_id=?');
+  let reassigned = 0;
+  for (const rider of riders) {
+    const zone = resolveZoneAt(rider.current_lat, rider.current_lng);
+    update.run(zone.id, zone.name, rider.user_id);
+    reassigned += 1;
+  }
+  return reassigned;
+}
+
+/**
+ * The single place a rider position becomes state. Every ingest path — the REST
+ * endpoint and both socket channels — goes through here, so a position can never
+ * be stored without its zone. A partial write (coordinates updated, zone left
+ * pointing at wherever the rider used to be) is worse than no write at all: it
+ * silently dispatches against a stale service area.
+ *
+ * Returns the resolved zone descriptor; `in_service_area: false` means the rider
+ * is parked outside every zone and is visible to operations but not dispatchable.
+ */
+function recordRiderPosition(riderId, lat, lng, { accuracy = null, deliveryId = null, rideId = null } = {}) {
+  const zone = resolveZoneAt(lat, lng);
+  const fixAccuracy = Number.isFinite(accuracy) ? accuracy : null;
+  db.prepare(`UPDATE riders SET current_lat=?,current_lng=?,current_zone_id=?,current_zone_name=?,
+      last_location_accuracy=?,last_location_update=datetime('now') WHERE user_id=?`)
+    .run(lat, lng, zone.id, zone.name, fixAccuracy, riderId);
+  db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng,zone_id,accuracy) VALUES (?,?,?,?,?,?,?,?)')
+    .run(uuidv4(), riderId, deliveryId, rideId, lat, lng, zone.id, fixAccuracy);
+  return zone;
+}
+
+/**
+ * Returns a rider to the dispatch pool after a job ends (completed, cancelled or
+ * handed to someone else) and re-resolves the zone they are standing in now.
+ *
+ * A rider finishes a delivery wherever the drop-off was, which is routinely a
+ * different zone from the one they started in. Flipping `online_status` without
+ * re-resolving would put them back in the pool advertising their pre-job zone, so
+ * they would be offered work in a zone they have since left.
+ */
+function returnRiderToPool(riderId, extraSets = '') {
+  if (!riderId) return null;
+  db.prepare(`UPDATE riders SET online_status='online',availability='online'${extraSets ? ',' + extraSets : ''},updated_at=datetime('now') WHERE user_id=?`)
+    .run(riderId);
+  const rider = db.prepare('SELECT current_lat,current_lng FROM riders WHERE user_id=?').get(riderId);
+  if (!rider || !Number.isFinite(rider.current_lat) || !Number.isFinite(rider.current_lng)) return null;
+  const zone = resolveZoneAt(rider.current_lat, rider.current_lng);
+  db.prepare('UPDATE riders SET current_zone_id=?,current_zone_name=? WHERE user_id=?').run(zone.id, zone.name, riderId);
+  return zone;
 }
 
 /**
@@ -926,15 +1140,24 @@ function resolveZoneAt(lat, lng) {
 }
 
 /**
- * Proximity between two points that already carry a resolved zone. Riders in the
- * pickup's own zone are the natural candidates, so they sort ahead of everyone
- * else regardless of raw straight-line distance — a rider 2 km away across a zone
- * boundary is a worse match than one 3 km away inside the zone the price was
- * quoted for.
+ * Ranks one candidate rider against a pickup, zone first and distance second.
+ *
+ * The tier is the rider's zone's position in the pickup's zone search order:
+ * tier 0 is the pickup's own zone, tier 1 the next nearest service area, and so
+ * on, with riders outside every zone behind all of them. Raw distance only ever
+ * breaks ties *within* a tier — a rider 2 km away across a zone boundary is a
+ * worse match than one 3 km away inside the zone the price was quoted for, and
+ * a rider sitting in no service area at all is the last resort rather than a
+ * peer of the neighbouring zone's riders.
  */
-function zoneAwareRank(riderZoneId, pickupZoneId, distanceKm) {
+function zoneAwareRank(riderZoneId, pickupZoneId, distanceKm, zoneOrder = null) {
   const sameZone = Boolean(pickupZoneId) && riderZoneId === pickupZoneId;
-  return { same_zone: sameZone, rank: (sameZone ? 0 : 1) * 1e6 + distanceKm };
+  let zoneRank;
+  if (sameZone) zoneRank = 0;
+  else if (!zoneOrder) zoneRank = 1;
+  else if (riderZoneId && zoneOrder.rankById.has(riderZoneId)) zoneRank = zoneOrder.rankById.get(riderZoneId);
+  else zoneRank = zoneOrder.outOfZoneRank;
+  return { same_zone: sameZone, zone_rank: zoneRank, rank: zoneRank * 1e6 + distanceKm };
 }
 
 /**
@@ -1124,9 +1347,14 @@ function updateRideStatus(id, status, extra = {}) {
   emitRideUpdate(id, { status });
 }
 
-function eligibleNearbyDrivers(lat, lng, radiusKm) {
+function eligibleNearbyDrivers(lat, lng, radiusKm, options = {}) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
   const pickupZoneId = resolveZoneAt(lat, lng).id;
+  const zoneOrder = zoneSearchOrder(lat, lng, pickupZoneId);
+  // exactZoneRank: one dispatch wave asks exactly one zone tier. maxZoneRank: the
+  // discovery map shows every tier up to the dispatch depth.
+  const exactZoneRank = Number.isFinite(options.exactZoneRank) ? options.exactZoneRank : null;
+  const maxZoneRank = Number.isFinite(options.maxZoneRank) ? options.maxZoneRank : null;
   const drivers = db.prepare(`SELECT u.id,u.full_name,u.avatar,r.avg_rating,r.rating_count,r.vehicle_type,
       r.car_make,r.car_model,r.car_color,r.car_plate,r.motorcycle_plate,
       r.current_lat,r.current_lng,r.current_zone_id,r.current_zone_name,r.last_location_update,
@@ -1139,14 +1367,26 @@ function eligibleNearbyDrivers(lat, lng, radiusKm) {
     .all(`-${freshnessSeconds} seconds`);
   return drivers
     .filter(driver => driver.active_deliveries === 0 && driver.active_rides === 0)
+    .map(driver => ({ ...driver, resolved_zone_id: riderZoneId(driver, zoneOrder.zones) }))
+    // Same rule as parcel dispatch: a driver outside every service area is not a
+    // candidate for a pickup that sits inside one.
+    .filter(driver => !pickupZoneId || Boolean(driver.resolved_zone_id))
     .map(driver => {
       const distance_km = Math.round(haversine(lat, lng, driver.current_lat, driver.current_lng) * 100) / 100;
-      const { same_zone, rank } = zoneAwareRank(driver.current_zone_id, pickupZoneId, distance_km);
-      return { ...driver, distance_km, same_zone, rank };
+      const { same_zone, zone_rank, rank } = zoneAwareRank(driver.resolved_zone_id, pickupZoneId, distance_km, zoneOrder);
+      return { ...driver, distance_km, same_zone, zone_rank, rank };
     })
-    .filter(driver => driver.same_zone || driver.distance_km <= radiusKm)
+    // Ride-hailing also runs where no delivery zones are drawn (Maputo). With no
+    // pickup zone there are no tiers to walk, so the plain radius search applies.
+    .filter(driver => !pickupZoneId
+      ? driver.distance_km <= radiusKm
+      : exactZoneRank !== null
+      ? Boolean(driver.resolved_zone_id) && driver.zone_rank === exactZoneRank
+      : maxZoneRank !== null
+      ? Boolean(driver.resolved_zone_id) && driver.zone_rank <= maxZoneRank
+      : driver.same_zone || driver.distance_km <= radiusKm)
     .sort((a, b) => a.rank - b.rank)
-    .map(({ active_deliveries, active_rides, rank, ...driver }) => driver);
+    .map(({ active_deliveries, active_rides, rank, resolved_zone_id, ...driver }) => driver);
 }
 
 function canAccessRide(user, ride) {
@@ -1294,9 +1534,12 @@ app.post('/api/auth/verify-otp', route(async (req, res) => {
   const canonicalPhone = normalizePhone(phone);
   const user = canonicalPhone ? db.prepare('SELECT * FROM users WHERE phone=?').get(canonicalPhone) : null;
   if (!user) return resErr(res, 'User not found', 404, 'account_not_found');
+  // Verifying a phone proves ownership, not good standing: only a 'pending' account is
+  // activated here, so a suspended user cannot lift their own suspension with an OTP.
+  if (!['active', 'pending'].includes(user.status)) return resErr(res, 'Account is ' + user.status, 403, 'account_' + user.status);
   const lock = lockoutState(user);
   if (lock.locked) return resErr(res, `Too many attempts. Try again in ${lock.minutes} minute(s).`, 423, 'account_locked');
-  if (!/^[0-9]{6}$/.test(otp)) return resErr(res, 'OTP must be six digits', 400, 'invalid_otp');
+  if (typeof otp !== 'string' || !/^[0-9]{6}$/.test(otp)) return resErr(res, 'OTP must be six digits', 400, 'invalid_otp');
   const isMasterTestOtp = runtime.otpTestMode && otp === MASTER_TEST_OTP;
   if (!isMasterTestOtp) {
     if ((user.otp_attempts || 0) >= runtime.security.maxOtpAttempts) {
@@ -1310,7 +1553,7 @@ app.post('/api/auth/verify-otp', route(async (req, res) => {
     }
     if (new Date(`${String(user.otp_expires).replace(' ', 'T')}Z`) < new Date()) return resErr(res, 'OTP expired', 400, 'otp_expired');
   }
-  db.prepare("UPDATE users SET otp_code=NULL,otp_expires=NULL,otp_attempts=0,status='active' WHERE id=?").run(user.id);
+  db.prepare("UPDATE users SET otp_code=NULL,otp_expires=NULL,otp_attempts=0,status=CASE WHEN status='pending' THEN 'active' ELSE status END WHERE id=?").run(user.id);
   clearLoginFailures(user.id);
   audit(user.id, 'otp_verified', 'user', user.id, null);
   resOK(res, { token: issueToken(user), user: authProfile(user) });
@@ -1322,8 +1565,12 @@ app.post('/api/auth/login', route(async (req, res) => {
   const canonicalPhone = normalizePhone(phone);
   const user = canonicalPhone ? db.prepare('SELECT * FROM users WHERE phone=?').get(canonicalPhone) : null;
   if (!user) return resErr(res, 'Account not found', 404, 'account_not_found');
+  if (!['active', 'pending'].includes(user.status)) return resErr(res, 'Account is ' + user.status, 403, 'account_' + user.status);
   const lock = lockoutState(user);
   if (lock.locked) return resErr(res, `Account temporarily locked. Try again in ${lock.minutes} minute(s).`, 423, 'account_locked');
+  // An SMS code alone is too weak a credential for the operations console: admins
+  // must present their password.
+  if (user.role === 'admin' && !(password && user.password)) return resErr(res, 'Password required for administrator sign-in', 401, 'password_required');
   if (password && user.password) {
     if (!(await bcrypt.compare(password, user.password))) {
       const locked = registerFailedLogin(user);
@@ -1450,6 +1697,13 @@ app.put('/api/rider/profile', auth, roleAuth('rider'), (req, res) => {
       if (req.body[f] !== undefined) { updates.push(`${f}=?`); vals.push(req.body[f]); }
     }
     if (updates.length === 0) return resErr(res, 'Nothing to update');
+    // Identity and vehicle fields are what operations vetted at approval; an approved
+    // rider cannot swap them out without going back through review.
+    const vetted = ['national_id','license_number','motorcycle_plate','vehicle_type','car_plate'];
+    const current = db.prepare('SELECT approval_status FROM riders WHERE user_id=?').get(req.user.id);
+    if (current?.approval_status === 'approved' && vetted.some(f => req.body[f] !== undefined)) {
+      return resErr(res, 'Identity and vehicle details are locked after approval. Contact support to change them.', 403, 'vetted_fields_locked');
+    }
     updates.push("updated_at=datetime('now')");
     vals.push(req.user.id);
     db.prepare(`UPDATE riders SET ${updates.join(',')} WHERE user_id=?`).run(...vals);
@@ -1496,7 +1750,7 @@ app.get('/api/rider/documents/:riderId/:kind', auth, (req, res) => {
 const RIDER_AVAILABILITY = ['online', 'busy', 'unavailable', 'offline'];
 
 app.put('/api/rider/status', auth, roleAuth('rider'), route((req, res) => {
-  const rider = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(req.user.id);
+  const rider = db.prepare('SELECT approval_status,online_status,current_lat,current_lng FROM riders WHERE user_id=?').get(req.user.id);
   if (!rider) return resErr(res, 'Rider profile not found', 404, 'rider_not_found');
   if (rider.approval_status !== 'approved') return resErr(res, 'Rider not yet approved', 403, 'rider_not_approved');
   const requested = req.body.status !== undefined
@@ -1506,8 +1760,29 @@ app.put('/api/rider/status', auth, roleAuth('rider'), route((req, res) => {
   const activeRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status NOT IN ('completed','cancelled')").get(req.user.id);
   if ((active || activeRide) && requested !== 'busy') return resErr(res, 'Finish or hand back your active delivery/ride before changing availability', 409, 'active_delivery');
   db.prepare("UPDATE riders SET online_status=?,availability=?,updated_at=datetime('now') WHERE user_id=?").run(requested, requested, req.user.id);
-  audit(req.user.id, 'rider_availability_changed', 'rider', req.user.id, { from: rider.online_status, to: requested });
-  resOK(res, { online_status: requested, availability: requested, accepting_offers: requested === 'online' });
+
+  // Coming online is the moment a rider joins a dispatch pool, so their zone is
+  // (re)assigned here from their last known fix rather than waiting for the next
+  // GPS ping — otherwise a rider who went offline in one zone and came back online
+  // after a zone edit would be dispatched against a stale service area. Riders with
+  // no position yet stay unzoned and undispatchable until their first location post.
+  let zone = { id: null, name: null, in_service_area: false };
+  if (['online', 'busy'].includes(requested) && Number.isFinite(rider.current_lat) && Number.isFinite(rider.current_lng)) {
+    zone = resolveZoneAt(rider.current_lat, rider.current_lng);
+    db.prepare('UPDATE riders SET current_zone_id=?,current_zone_name=? WHERE user_id=?').run(zone.id, zone.name, req.user.id);
+  } else if (requested === 'offline' || requested === 'unavailable') {
+    // An offline rider holds no place in any zone's pool.
+    db.prepare('UPDATE riders SET current_zone_id=NULL,current_zone_name=NULL WHERE user_id=?').run(req.user.id);
+  }
+
+  audit(req.user.id, 'rider_availability_changed', 'rider', req.user.id, { from: rider.online_status, to: requested, zone_id: zone.id });
+  resOK(res, {
+    online_status: requested, availability: requested, accepting_offers: requested === 'online',
+    // The app needs to know it is online but unzoned (no fix yet, or parked outside
+    // every service area) — that state receives no offers and must be visible.
+    zone: { id: zone.id, name: zone.name, in_service_area: zone.in_service_area },
+    dispatchable: requested === 'online' && zone.in_service_area
+  });
 }));
 
 // ─── Rider safety: incidents and SOS (spec §7.10) ────────────
@@ -1574,15 +1849,13 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   const accuracy = req.body.accuracy === undefined ? null : Number(req.body.accuracy);
   const rider = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(req.user.id);
   if (!rider || rider.approval_status !== 'approved' || !['online','busy'].includes(rider.online_status)) return resErr(res, 'Approved online rider required', 403);
-  // Zone is resolved here, at ingest, so dispatch and proximity never have to
-  // recompute it per candidate rider (spec §12: zone-based blind dispatch).
-  const zone = resolveZoneAt(Number(lat), Number(lng));
-  db.prepare('UPDATE riders SET current_lat=?,current_lng=?,current_zone_id=?,current_zone_name=?,last_location_accuracy=?,last_location_update=datetime(\'now\') WHERE user_id=?')
-    .run(lat, lng, zone.id, zone.name, Number.isFinite(accuracy) ? accuracy : null, req.user.id);
   const activeDelivery = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
   const activeRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination') ORDER BY updated_at DESC LIMIT 1").get(req.user.id);
-  db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng,zone_id,accuracy) VALUES (?,?,?,?,?,?,?,?)')
-    .run(uuidv4(), req.user.id, activeDelivery?.id || null, activeRide?.id || null, lat, lng, zone.id, Number.isFinite(accuracy) ? accuracy : null);
+  // Zone is resolved here, at ingest, so dispatch and proximity never have to
+  // recompute it per candidate rider (spec §12: zone-based blind dispatch).
+  const zone = recordRiderPosition(req.user.id, Number(lat), Number(lng), {
+    accuracy, deliveryId: activeDelivery?.id || null, rideId: activeRide?.id || null
+  });
   if (activeDelivery) io.to(`delivery:${activeDelivery.id}`).emit('rider_location', { delivery_id: activeDelivery.id, lat: Number(lat), lng: Number(lng) });
   if (activeRide) io.to(`ride:${activeRide.id}`).emit('driver_location', { ride_id: activeRide.id, lat: Number(lat), lng: Number(lng) });
   resOK(res, {
@@ -1595,14 +1868,28 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
 app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
   expireLapsedOffers();
   expireRideOffers();
-  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.total_deliveries,r.total_rides,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.vehicle_type,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,r.car_make,r.car_model,r.car_color,r.car_plate,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
+  const rider = db.prepare("SELECT r.approval_status,r.online_status,r.last_location_update,r.current_lat,r.current_lng,r.current_zone_id,r.current_zone_name,r.total_deliveries,r.total_rides,r.total_earnings,r.avg_rating,r.rating_count,r.profile_photo,r.vehicle_type,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,r.car_make,r.car_model,r.car_color,r.car_plate,u.full_name FROM riders r JOIN users u ON u.id=r.user_id WHERE r.user_id=?").get(req.user.id);
   const activeDelivery = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
   const activeRide = db.prepare("SELECT * FROM rides WHERE driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination') ORDER BY updated_at DESC LIMIT 1").get(req.user.id) || null;
   const offers = db.prepare(`SELECT o.id as offer_id,o.expires_at,d.id,d.order_no,d.service_type,d.pickup_address,d.pickup_lat,d.pickup_lng,d.pickup_name,d.pickup_phone,d.dest_address,d.dest_lat,d.dest_lng,d.dest_name,d.dest_phone,d.rider_earnings,d.distance_km
     FROM delivery_offers o JOIN deliveries d ON d.id=o.delivery_id WHERE o.rider_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
   const rideOffers = db.prepare(`SELECT o.id as offer_id,o.expires_at,r.id,r.ride_no,r.pickup_address,r.pickup_lat,r.pickup_lng,r.dest_address,r.dest_lat,r.dest_lng,r.driver_earnings,r.distance_km,r.estimated_minutes
     FROM ride_offers o JOIN rides r ON r.id=o.ride_id WHERE o.driver_id=? AND o.status='offered' AND o.expires_at>datetime('now') ORDER BY o.expires_at`).all(req.user.id);
-  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery, activeRide, offers, rideOffers, tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide)), serverTime: new Date().toISOString() });
+  // The rider's dispatch standing, stated plainly rather than inferred from
+  // online_status alone. "Online" with no resolved zone means the rider is visible
+  // to operations but will never be offered work — a state the app must be able to
+  // show, or a rider sits waiting for offers that can never arrive.
+  const zoneKnown = Boolean(rider.current_zone_id);
+  const dispatch = {
+    zone: { id: rider.current_zone_id || null, name: rider.current_zone_name || null, in_service_area: zoneKnown },
+    dispatchable: rider.online_status === 'online' && zoneKnown,
+    reason: rider.approval_status !== 'approved' ? 'not_approved'
+      : rider.online_status !== 'online' ? 'not_online'
+      : !Number.isFinite(rider.current_lat) || !Number.isFinite(rider.current_lng) ? 'no_location_fix'
+      : !zoneKnown ? 'outside_service_area'
+      : null
+  };
+  resOK(res, { ...rider, profile_photo_url: rider.profile_photo ? `/api/rider/documents/${req.user.id}/profile` : null, profile_photo: undefined, activeDelivery: riderDeliveryView(activeDelivery), activeRide, offers, rideOffers, ...dispatch, tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide)), serverTime: new Date().toISOString() });
 });
 
 app.put('/api/mobile/v1/rider/offers/:offerId/decline', auth, roleAuth('rider'), (req, res) => {
@@ -1683,7 +1970,7 @@ app.get('/api/rider/performance', auth, roleAuth('rider'), (req, res) => {
 app.get('/api/rider/active-delivery', auth, roleAuth('rider'), (req, res) => {
   const d = db.prepare("SELECT * FROM deliveries WHERE rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest') ORDER BY created_at DESC LIMIT 1")
     .get(req.user.id);
-  resOK(res, d || null);
+  resOK(res, riderDeliveryView(d) || null);
 });
 
 app.post('/api/rider/deliveries/:id/proof', auth, roleAuth('rider'), requireFeature('podPhotoEnabled'), upload.single('proof'), (req, res) => {
@@ -1793,9 +2080,18 @@ function customerDeliveries(user) {
     ORDER BY created_at DESC LIMIT 200`).all(user.id, canonicalPhone, canonicalPhone);
 }
 
-function eligibleNearbyRiders(lat, lng, radiusKm) {
+function eligibleNearbyRiders(lat, lng, radiusKm, options = {}) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
   const pickupZoneId = resolveZoneAt(lat, lng).id;
+  const zoneOrder = zoneSearchOrder(lat, lng, pickupZoneId);
+  // How many zones deep the caller is willing to look. Dispatch walks this outward
+  // (own zone, then the next nearest, then the one after) so an empty home zone
+  // falls through to the neighbouring service area instead of to whatever happens
+  // to sit inside a straight-line radius.
+  // exactZoneRank: one dispatch wave asks exactly one zone tier. maxZoneRank: the
+  // discovery map shows every tier up to the dispatch depth.
+  const exactZoneRank = Number.isFinite(options.exactZoneRank) ? options.exactZoneRank : null;
+  const maxZoneRank = Number.isFinite(options.maxZoneRank) ? options.maxZoneRank : null;
   const riders = db.prepare(`SELECT u.id,u.full_name,r.avg_rating,r.rating_count,r.motorcycle_plate,r.motorcycle_make,r.motorcycle_type,r.motorcycle_color,
     r.current_lat,r.current_lng,r.current_zone_id,r.current_zone_name,r.last_location_update,
     (SELECT COUNT(*) FROM deliveries d WHERE d.rider_id=r.user_id AND d.status NOT IN ('delivered','cancelled','failed')) AS active_count
@@ -1806,16 +2102,25 @@ function eligibleNearbyRiders(lat, lng, radiusKm) {
     .all(`-${freshnessSeconds} seconds`);
   return riders
     .filter(rider => rider.active_count === 0)
+    .map(rider => ({ ...rider, resolved_zone_id: riderZoneId(rider, zoneOrder.zones) }))
+    // A rider parked outside every service area is not dispatchable for a pickup
+    // that IS inside one: MOVO has no priced relationship with where they are
+    // standing. They stay visible to operations, but they are not a candidate.
+    .filter(rider => !pickupZoneId || Boolean(rider.resolved_zone_id))
     .map(rider => {
       const distance_km = Math.round(haversine(lat, lng, rider.current_lat, rider.current_lng) * 100) / 100;
       // The zone was resolved when this rider's position arrived, so matching is a
       // zone comparison first and a radius check only as the tie-breaker.
-      const { same_zone, rank } = zoneAwareRank(rider.current_zone_id, pickupZoneId, distance_km);
-      return { ...rider, distance_km, same_zone, rank };
+      const { same_zone, zone_rank, rank } = zoneAwareRank(rider.resolved_zone_id, pickupZoneId, distance_km, zoneOrder);
+      return { ...rider, distance_km, same_zone, zone_rank, rank };
     })
-    .filter(rider => rider.same_zone || rider.distance_km <= radiusKm)
+    .filter(rider => exactZoneRank !== null
+      ? Boolean(rider.resolved_zone_id) && rider.zone_rank === exactZoneRank
+      : maxZoneRank !== null
+      ? Boolean(rider.resolved_zone_id) && rider.zone_rank <= maxZoneRank
+      : rider.same_zone || rider.distance_km <= radiusKm)
     .sort((a, b) => a.rank - b.rank)
-    .map(({ active_count, rank, ...rider }) => rider);
+    .map(({ active_count, rank, resolved_zone_id, ...rider }) => rider);
 }
 
 /**
@@ -1848,8 +2153,10 @@ function customerRiderPreview(rider) {
     rating_count: Number(rider.rating_count) || 0,
     distance_km: rider.distance_km,
     eta_minutes: riderEtaMinutes(rider.distance_km),
-    lat: rider.current_lat,
-    lng: rider.current_lng,
+    // Coarsened to ~110 m: enough to place a marker and choose, not enough for any
+    // customer account to follow a specific rider home in real time.
+    lat: Math.round(rider.current_lat * 1000) / 1000,
+    lng: Math.round(rider.current_lng * 1000) / 1000,
     zone: rider.current_zone_name || null,
     same_zone: Boolean(rider.same_zone)
   };
@@ -1867,7 +2174,10 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
   // §12), not later at quote time — otherwise "no riders nearby" and "MOVO
   // doesn't operate here at all" look identical to the client.
   const zone = findZone(lat, lng);
-  const riders = eligibleNearbyRiders(lat, lng, radiusKm);
+  // The discovery map must show the same pool dispatch would actually reach, so it
+  // walks the same zone tiers: the pickup's own zone first, then the nearest others.
+  const maxZoneRank = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
+  const riders = eligibleNearbyRiders(lat, lng, radiusKm, { maxZoneRank });
   resOK(res, {
     rider_count: riders.length,
     // Riders already inside the pickup's own zone are the ones dispatch will reach
@@ -2111,7 +2421,7 @@ app.put('/api/deliveries/:id/accept', auth, roleAuth('rider'), (req, res) => {
   notifyUser(d.customer_id, 'rider_assigned', 'Rider Assigned', `A rider has been assigned to your delivery ${d.order_no}`, { delivery_id: d.id });
   notifyDeliveryParticipant(d, 'rider_assigned', 'Delivery on the way', `A MOVO rider is collecting a ${d.service_type} addressed to you (${d.order_no}).`);
   emitDeliveryUpdate(d.id, { status: 'assigned', rider_id: req.user.id });
-  resOK(res, { message: 'Delivery accepted', delivery: db.prepare('SELECT * FROM deliveries WHERE id=?').get(d.id) });
+  resOK(res, { message: 'Delivery accepted', delivery: riderDeliveryView(db.prepare('SELECT * FROM deliveries WHERE id=?').get(d.id)) });
 });
 
 app.put('/api/deliveries/:id/going-pickup', auth, roleAuth('rider'), (req, res) => {
@@ -2181,8 +2491,10 @@ app.put('/api/deliveries/:id/complete', auth, roleAuth('rider'), otpHandoverLimi
     db.prepare("UPDATE deliveries SET pod_reference=? WHERE id=?").run(podReference, d.id);
     if (signature && runtime.features.signatureEnabled) db.prepare("UPDATE deliveries SET delivery_notes=COALESCE(delivery_notes,'') || ? WHERE id=?")
       .run(` | signed: ${String(signature).slice(0, 120)}`, d.id);
-    db.prepare("UPDATE riders SET total_deliveries=total_deliveries+1, online_status='online', availability='online', updated_at=datetime('now') WHERE user_id=?")
-      .run(req.user.id);
+    db.prepare("UPDATE riders SET total_deliveries=total_deliveries+1 WHERE user_id=?").run(req.user.id);
+    // Back into the pool at the drop-off, which is often a different zone from the
+    // one this delivery started in — so the zone is re-resolved, not carried over.
+    returnRiderToPool(req.user.id);
     // Customer charge and platform fee settle immediately; the rider payout is a
     // separate obligation (see settlePayout) that can fail/retry independently
     // without the delivery or these two ledger entries being rolled back.
@@ -2232,7 +2544,7 @@ app.put('/api/deliveries/:id/cancel', auth, route((req, res) => {
     }
   })();
   if (d.rider_id) {
-    db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(d.rider_id);
+    returnRiderToPool(d.rider_id);
     notifyUser(d.rider_id, 'delivery_cancelled', 'Delivery Cancelled', `Delivery ${d.order_no} has been cancelled`);
   }
   notifyUser(d.customer_id, 'delivery_cancelled', 'Delivery Cancelled',
@@ -2307,7 +2619,8 @@ app.post('/api/payments/process', auth, (req, res) => {
     // No real payment gateway is wired in yet — this endpoint lets a customer self-assert
     // that they've paid. That's fine for a sandbox demo but must never accept real traffic
     // until a real provider is integrated, since it currently just trusts the client.
-    if (runtime.providers.payment !== 'sandbox') {
+    // The sandbox trusts the client's word that it paid, so it is never live in production.
+    if (runtime.providers.payment !== 'sandbox' || runtime.production) {
       return resErr(res, 'Payment provider is not configured for live processing', 501, 'payment_provider_not_configured');
     }
     const { delivery_id, method } = req.body;
@@ -2484,8 +2797,9 @@ app.put('/api/rides/:id/complete', auth, roleAuth('rider'), route((req, res) => 
       payment_status: cashSettled ? 'paid' : ride.payment_status,
       paid_at: cashSettled ? now : ride.paid_at
     });
-    db.prepare("UPDATE riders SET total_rides=COALESCE(total_rides,0)+1, total_earnings=total_earnings+?, online_status='online', availability='online', updated_at=datetime('now') WHERE user_id=?")
+    db.prepare("UPDATE riders SET total_rides=COALESCE(total_rides,0)+1, total_earnings=total_earnings+? WHERE user_id=?")
       .run(ride.driver_earnings, req.user.id);
+    returnRiderToPool(req.user.id);
     const payment = db.prepare('INSERT INTO payments (id,ride_id,user_id,amount,type,method,status,processed_at) VALUES (?,?,?,?,?,?,?,?)');
     payment.run(uuidv4(), ride.id, req.user.id, ride.driver_earnings, 'rider_payout', ride.payment_method, 'completed', now);
     if (cashSettled) {
@@ -2520,7 +2834,7 @@ app.put('/api/rides/:id/cancel', auth, route((req, res) => {
     db.prepare("UPDATE ride_offers SET status='expired',responded_at=datetime('now') WHERE ride_id=? AND status='offered'").run(ride.id);
   })();
   if (ride.driver_id) {
-    db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(ride.driver_id);
+    returnRiderToPool(ride.driver_id);
     notifyUser(ride.driver_id, 'ride_cancelled', 'Ride cancelled', `Ride ${ride.ride_no} has been cancelled`);
   }
   notifyUser(ride.customer_id, 'ride_cancelled', 'Ride cancelled',
@@ -2530,7 +2844,7 @@ app.put('/api/rides/:id/cancel', auth, route((req, res) => {
 }));
 
 app.post('/api/rides/:id/pay', auth, roleAuth('customer'), (req, res) => {
-  if (runtime.providers.payment !== 'sandbox') return resErr(res, 'Payment provider is not configured for live processing', 501, 'payment_provider_not_configured');
+  if (runtime.providers.payment !== 'sandbox' || runtime.production) return resErr(res, 'Payment provider is not configured for live processing', 501, 'payment_provider_not_configured');
   const ride = db.prepare('SELECT * FROM rides WHERE id=? AND customer_id=?').get(req.params.id, req.user.id);
   if (!ride) return resErr(res, 'Ride not found', 404, 'ride_not_found');
   if (ride.payment_status === 'paid') return resErr(res, 'Already paid', 409, 'already_paid');
@@ -2817,7 +3131,7 @@ app.put('/api/admin/deliveries/:id/reassign', auth, roleAuth('admin'), route((re
     db.prepare("UPDATE deliveries SET rider_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=?").run(riderId, d.id);
     db.prepare("UPDATE delivery_offers SET status='expired',responded_at=datetime('now') WHERE delivery_id=? AND status='offered'").run(d.id);
     db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(riderId);
-    if (previousRider && previousRider !== riderId) db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(previousRider);
+    if (previousRider && previousRider !== riderId) returnRiderToPool(previousRider);
     addEvent(d.id, 'assigned', null, null, `Reassigned by operations to ${rider.full_name}`);
   })();
   audit(req.user.id, 'delivery_reassigned', 'delivery', d.id, { from: previousRider, to: riderId });
@@ -2867,7 +3181,7 @@ app.put('/api/admin/rides/:id/reassign', auth, roleAuth('admin'), route((req, re
     db.prepare("UPDATE rides SET driver_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=?").run(driverId, ride.id);
     db.prepare("UPDATE ride_offers SET status='expired',responded_at=datetime('now') WHERE ride_id=? AND status='offered'").run(ride.id);
     db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(driverId);
-    if (previousDriver && previousDriver !== driverId) db.prepare("UPDATE riders SET online_status='online',availability='online' WHERE user_id=?").run(previousDriver);
+    if (previousDriver && previousDriver !== driverId) returnRiderToPool(previousDriver);
     addRideEvent(ride.id, 'assigned', null, null, `Reassigned by operations to ${driver.full_name}`);
   })();
   audit(req.user.id, 'ride_reassigned', 'ride', ride.id, { from: previousDriver, to: driverId });
@@ -3053,8 +3367,11 @@ app.post('/api/admin/zones', auth, roleAuth('admin'), route((req, res) => {
     VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`)
     .run(id, name, center_lat, center_lng, radius_km||3, base_price_parcel||1500, base_price_document||1000, per_km_rate||200, sort_order||0, boundary);
   const pricingRows = seedZonePricing(id);
+  // A new service area can capture riders who were previously outside every zone
+  // (or sitting in a neighbour it overlaps), so re-resolve the cached rider zones.
+  const reassigned = refreshRiderZones();
   audit(req.user.id, 'zone_created', 'zone', id, { name, boundary: Boolean(boundary), pricing_rows: pricingRows });
-  resOK(res, { id, message: 'Zone created', pricing_rows: pricingRows }, 201);
+  resOK(res, { id, message: 'Zone created', pricing_rows: pricingRows, riders_rezoned: reassigned }, 201);
 }));
 
 // A zone's geometry (its center/radius or drawn boundary) drives every price quote
@@ -3095,7 +3412,11 @@ app.put('/api/admin/zones/:id', auth, roleAuth('admin'), route((req, res) => {
   }
   vals.push(req.params.id);
   db.prepare(`UPDATE delivery_zones SET ${sets.join(',')} WHERE id=?`).run(...vals);
-  resOK(res, { message: 'Zone updated', version: geometryChanged ? existing.version + 1 : existing.version });
+  // Rider zones are cached at location ingest, so a geometry or activation change
+  // would otherwise keep dispatching against the old map until each rider's next
+  // GPS ping (up to the tracking interval). Re-resolve them now.
+  const reassigned = (geometryChanged || req.body.is_active !== undefined) ? refreshRiderZones() : 0;
+  resOK(res, { message: 'Zone updated', version: geometryChanged ? existing.version + 1 : existing.version, riders_rezoned: reassigned });
 }));
 
 app.get('/api/admin/pricing', auth, roleAuth('admin'), (req, res) => {
@@ -3239,6 +3560,24 @@ function offerDeliveryToRider(delivery, rider, timeoutSeconds) {
   return offerId;
 }
 
+/**
+ * Looks up one specific rider as a dispatch candidate, with no distance or zone
+ * ceiling — the eligibility rules (approved, online, fresh fix, idle, inside some
+ * service area) still apply, but proximity does not.
+ *
+ * This exists for the customer's explicit choice. The discovery map lists riders
+ * out to 20 km, so a customer can see and pick a rider farther away than the
+ * dispatch search radius (default 11 km at full expansion) would ever reach.
+ * Ranking that pick against the search radius silently dropped the choice and
+ * offered the parcel to somebody else — the exact "never told 'your rider' about a
+ * stranger" failure the preferred-rider flow exists to prevent. A rider the
+ * customer could see and select must be reachable when they select them.
+ */
+function findDispatchableRider(riderId, lat, lng) {
+  if (!riderId) return null;
+  return eligibleNearbyRiders(lat, lng, Infinity).find(rider => rider.id === riderId) || null;
+}
+
 function dispatchDelivery(deliveryId) {
   updateDeliveryStatus(deliveryId, 'searching');
   const d = db.prepare('SELECT * FROM deliveries WHERE id=?').get(deliveryId);
@@ -3248,6 +3587,11 @@ function dispatchDelivery(deliveryId) {
   const expandStep = parseFloat(getConfig('rider_search_expand_km', '2'));
   const maxRadius = radius + expandStep * 3;
   const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'));
+  // Zone-first search: wave 0 asks only the pickup's own zone, and each expansion
+  // admits the next-nearest zone as well as a wider radius. Capped so a parcel in
+  // Kigali is never offered to a rider in a far-flung service area.
+  let zoneRank = 0;
+  const maxZoneRank = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
   // A customer who picked a rider off the discovery map gets that rider offered the
   // job first, alone, before anyone else is approached. The preference is consumed
   // once honoured or once it becomes impossible (the rider went offline or stale),
@@ -3260,11 +3604,11 @@ function dispatchDelivery(deliveryId) {
   }
 
   function search() {
+    if (!stillSearching()) return;
     // First refusal for the chosen rider: offered on their own, at any distance,
     // because the customer has already decided who they are handing the parcel to.
     if (preferredRiderId) {
-      const chosen = eligibleNearbyRiders(Number(d.pickup_lat), Number(d.pickup_lng), maxRadius)
-        .find(rider => rider.id === preferredRiderId);
+      const chosen = findDispatchableRider(preferredRiderId, Number(d.pickup_lat), Number(d.pickup_lng));
       if (chosen) {
         offerDeliveryToRider(d, chosen, timeoutSeconds);
         setTimeout(() => {
@@ -3279,24 +3623,31 @@ function dispatchDelivery(deliveryId) {
       preferredRiderId = null;
     }
 
-    const nearby = eligibleNearbyRiders(Number(d.pickup_lat), Number(d.pickup_lng), radius)
+    // Wave 0 is the pickup's own zone only (radius 0 admits nobody on distance
+    // alone); later waves widen both the zone depth and the kilometre fallback.
+    const nearby = eligibleNearbyRiders(
+      Number(d.pickup_lat), Number(d.pickup_lng),
+      zoneRank === 0 ? 0 : radius,
+      { exactZoneRank: zoneRank }
+    ).filter(candidate => !db.prepare('SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=?').get(deliveryId, candidate.id))
       .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
+
+    const canExpand = () => zoneRank < maxZoneRank;
+    const expand = () => {
+      if (zoneRank < maxZoneRank) zoneRank += 1;
+      if (zoneRank > 0 && radius < maxRadius) radius += expandStep;
+    };
 
     if (nearby.length > 0) {
       for (const rider of nearby.slice(0, 5)) offerDeliveryToRider(d, rider, timeoutSeconds);
       setTimeout(() => {
         if (!stillSearching()) return;
-        if (radius < maxRadius) {
-          radius += expandStep;
-          search();
-        } else {
-          updateDeliveryStatus(deliveryId, 'failed', { note: 'No rider found' });
-          notifyUser(d.customer_id, 'no_rider', 'No Rider Available', `We could not find a rider for ${d.order_no}. Please try again.`, { delivery_id: d.id });
-        }
+        expireLapsedOffers();
+        search();
       }, timeoutSeconds * 1000);
     } else {
-      if (radius < maxRadius) {
-        radius += expandStep;
+      if (canExpand()) {
+        expand();
         setTimeout(search, 3000);
       } else {
         updateDeliveryStatus(deliveryId, 'failed', { note: 'No rider found in expanded search' });
@@ -3319,11 +3670,26 @@ function dispatchRide(rideId) {
   let radius = parseFloat(getConfig('ride_driver_search_radius_km', '6'));
   const expandStep = parseFloat(getConfig('ride_driver_search_expand_km', '2'));
   const maxRadius = radius + expandStep * 3;
+  // Zone-first, exactly as parcel dispatch: the pickup's own zone first, then the
+  // next-nearest service area on each expansion.
+  let zoneRank = 0;
+  const maxZoneRank = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
+
+  const pickupZoned = Boolean(resolveZoneAt(Number(ride.pickup_lat), Number(ride.pickup_lng)).id);
+  function canExpand() { return zoneRank < maxZoneRank; }
+  function expand() {
+    if (zoneRank < maxZoneRank) zoneRank += 1;
+    if (zoneRank > 0 && radius < maxRadius) radius += expandStep;
+  }
 
   function search() {
     const current = db.prepare('SELECT status FROM rides WHERE id=?').get(rideId);
     if (!current || current.status !== 'searching') return;
-    const nearby = eligibleNearbyDrivers(Number(ride.pickup_lat), Number(ride.pickup_lng), radius)
+    const nearby = eligibleNearbyDrivers(
+      Number(ride.pickup_lat), Number(ride.pickup_lng),
+      zoneRank === 0 && pickupZoned ? 0 : radius,
+      { exactZoneRank: zoneRank }
+    ).filter(candidate => !db.prepare('SELECT id FROM ride_offers WHERE ride_id=? AND driver_id=?').get(rideId, candidate.id))
       .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
 
     if (nearby.length > 0) {
@@ -3345,15 +3711,11 @@ function dispatchRide(rideId) {
         expireRideOffers();
         const stillSearching = db.prepare('SELECT status FROM rides WHERE id=?').get(rideId);
         if (stillSearching && stillSearching.status === 'searching') {
-          if (radius < maxRadius) { radius += expandStep; search(); }
-          else {
-            updateRideStatus(rideId, 'cancelled', { cancelled_at: new Date().toISOString(), cancel_reason: 'No driver found', cancelled_by: 'system' });
-            notifyUser(ride.customer_id, 'no_driver', 'No Driver Available', `We could not find a driver for ${ride.ride_no}. Please try again.`, { ride_id: ride.id });
-          }
+          search();
         }
       }, timeoutSeconds * 1000 + 50);
-    } else if (radius < maxRadius) {
-      radius += expandStep;
+    } else if (canExpand()) {
+      expand();
       setTimeout(search, 3000);
     } else {
       updateRideStatus(rideId, 'cancelled', { cancelled_at: new Date().toISOString(), cancel_reason: 'No driver found nearby', cancelled_by: 'system' });
@@ -3421,8 +3783,10 @@ io.on('connection', (socket) => {
     const rider = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(currentUser.id);
     const delivery = db.prepare("SELECT id FROM deliveries WHERE id=? AND rider_id=? AND status IN ('assigned','going_pickup','arrived_pickup','picked_up','in_transit','arrived_dest')").get(deliveryId, currentUser.id);
     if (!rider || rider.approval_status !== 'approved' || !['online','busy'].includes(rider.online_status) || !delivery) return;
-    db.prepare("UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime('now') WHERE user_id=?").run(lat, lng, currentUser.id);
-    db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,lat,lng) VALUES (?,?,?,?,?)').run(uuidv4(), currentUser.id, deliveryId, lat, lng);
+    // Socket ingest resolves the zone exactly like the REST endpoint: a rider who
+    // only ever streams position over the socket must not drift out of the zoning
+    // model, or dispatch matches them against wherever they last used the REST path.
+    recordRiderPosition(currentUser.id, lat, lng, { deliveryId });
     io.to(`delivery:${deliveryId}`).emit('rider_location', { delivery_id: deliveryId, lat, lng });
   });
 
@@ -3444,8 +3808,7 @@ io.on('connection', (socket) => {
     const driver = db.prepare('SELECT approval_status,online_status FROM riders WHERE user_id=?').get(currentUser.id);
     const ride = db.prepare("SELECT id FROM rides WHERE id=? AND driver_id=? AND status IN ('assigned','driver_en_route','arrived_pickup','in_progress','arrived_destination')").get(rideId, currentUser.id);
     if (!driver || driver.approval_status !== 'approved' || !['online','busy'].includes(driver.online_status) || !ride) return;
-    db.prepare("UPDATE riders SET current_lat=?,current_lng=?,last_location_update=datetime('now') WHERE user_id=?").run(lat, lng, currentUser.id);
-    db.prepare('INSERT INTO rider_locations (id,rider_id,ride_id,lat,lng) VALUES (?,?,?,?,?)').run(uuidv4(), currentUser.id, rideId, lat, lng);
+    recordRiderPosition(currentUser.id, lat, lng, { rideId });
     io.to(`ride:${rideId}`).emit('driver_location', { ride_id: rideId, lat, lng });
   });
 

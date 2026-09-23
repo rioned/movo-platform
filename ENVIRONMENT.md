@@ -67,7 +67,7 @@ production. Copy [`.env.example`](.env.example) to `.env` to get started.
 | `MAP_PROVIDER` | `sandbox` | `sandbox`, `osm` | Selects the map tile/geocoding backend. `osm` is what the Android apps and admin portal actually render with (OpenStreetMap, no proprietary map SDK). |
 | `PAYMENT_PROVIDER` | `sandbox` | `sandbox`, `mtn-momo`, `airtel-money`, `mpesa` | Customer-facing payment collection. `sandbox` settles instantly for dev/pilot use; the live drivers are integration points, not yet wired to a real gateway. |
 | `PAYOUT_PROVIDER` | `sandbox` | `sandbox`, `mtn-momo`, `airtel-money` | Rider payout disbursement — a **separate** integration from `PAYMENT_PROVIDER` because collecting from the customer and paying out the rider go through different rails. See `src/services/payouts.js`. |
-| `SMS_PROVIDER` | `sandbox` | `sandbox`, `twilio` | OTP/notification delivery. See `src/services/messaging.js`. |
+| `SMS_PROVIDER` | `sandbox` | `sandbox`, `twilio` | OTP/notification delivery. See `src/services/messaging.js`. `sandbox` never delivers (a warning is logged in production); `twilio` needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM`, and `/ready` fails in production if they are incomplete. |
 
 `GET /ready` fails if any provider is set to a value outside this list —
 that's the config-validation half of readiness, independent of whether the

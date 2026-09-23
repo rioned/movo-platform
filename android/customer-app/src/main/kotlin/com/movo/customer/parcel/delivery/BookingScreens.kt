@@ -119,7 +119,7 @@ fun PaymentSheet(selectedId: String, options: List<PaymentOption>, onSelect: (St
 }
 
 @Composable
-fun ReviewScreen(draft: ParcelDraft, estimate: ParcelEstimate?, isDemo: Boolean, isSubmitting: Boolean, error: String?, onPayment: () -> Unit, onRefreshQuote: () -> Unit, onConfirm: () -> Unit, onBack: () -> Unit) {
+fun ReviewScreen(draft: ParcelDraft, estimate: ParcelEstimate?, isDemo: Boolean, isSubmitting: Boolean, error: String?, nearbyRiders: List<NearbyParcelRider> = emptyList(), loadingRiders: Boolean = false, onChooseRider: (String?) -> Unit = {}, onRefreshRiders: () -> Unit = {}, onPayment: () -> Unit, onRefreshQuote: () -> Unit, onConfirm: () -> Unit, onBack: () -> Unit) {
     Page("Review delivery", onBack) {
         ModeLabel(isDemo)
         JourneyStep("04", "Ready for the road", "Check the details and delivery fee before confirming.")
@@ -135,6 +135,7 @@ fun ReviewScreen(draft: ParcelDraft, estimate: ParcelEstimate?, isDemo: Boolean,
         if (draft.cashOnDelivery > 0) Text("Cash to collect: ${draft.cashOnDelivery} RWF")
         if (draft.photoUri != null) Text("Package photo attached")
         if (draft.notifySms) Text("Recipient SMS requested")
+        if (!isDemo) RiderChooser(draft.preferredRiderId, nearbyRiders, loadingRiders, onChooseRider, onRefreshRiders)
         MenuRow("Payment", draft.paymentMethod.replaceFirstChar { it.uppercase() }, onPayment)
         if (estimate == null) EmptyState("Get a current quote before confirming. No price has been assumed.")
         else {
@@ -149,5 +150,76 @@ fun ReviewScreen(draft: ParcelDraft, estimate: ParcelEstimate?, isDemo: Boolean,
         Failure(error)
         TextButton(onClick = onRefreshQuote, enabled = !isSubmitting) { Text("Refresh quote") }
         PrimaryButton(if (isSubmitting) "Requesting delivery…" else if (isDemo) "Create demo delivery" else "Confirm delivery", enabled = !isSubmitting && estimate != null && estimate.isDemo == isDemo && draft.pickup != null && draft.destination != null && validRecipient(draft.recipientName, draft.recipientPhone) && validRecipient(draft.senderName, draft.senderPhone) && draft.description.isNotBlank(), onClick = onConfirm)
+    }
+}
+
+/**
+ * Lets the customer see the riders near their pickup and choose who collects the parcel.
+ *
+ * The choice is a first refusal, not a lock: MOVO offers the job to the chosen rider
+ * first and falls back to the nearest available one if they decline or go quiet, so a
+ * pick can never strand a parcel. "Any available rider" is the default and restores the
+ * fully automatic match for customers with no preference.
+ */
+@Composable
+private fun RiderChooser(
+    selectedId: String?,
+    riders: List<NearbyParcelRider>,
+    loading: Boolean,
+    onChoose: (String?) -> Unit,
+    onRefresh: () -> Unit
+) {
+    HorizontalDivider()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Choose your rider", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRefresh, enabled = !loading) { Text(if (loading) "Checking…" else "Refresh") }
+    }
+    if (riders.isEmpty()) {
+        Text(
+            if (loading) "Looking for riders near your pickup…"
+            else "No riders are online near this pickup right now. MOVO will keep searching after you confirm.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    } else {
+        Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            RiderChoiceRow(
+                title = "Any available rider",
+                detail = "MOVO matches you with the nearest rider automatically.",
+                selected = selectedId == null,
+                onClick = { onChoose(null) }
+            )
+            riders.forEach { rider ->
+                RiderChoiceRow(
+                    title = "${rider.label} • ${rider.etaMinutes} min",
+                    detail = buildString {
+                        append("%.1f".format(rider.distanceKm)).append(" km away")
+                        if (rider.ratingCount > 0) append(" · ★ ${rider.rating} (${rider.ratingCount})") else append(" · New rider")
+                        rider.vehicle.takeIf(String::isNotBlank)?.let { append(" · $it") }
+                    },
+                    selected = selectedId == rider.id,
+                    onClick = { onChoose(rider.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RiderChoiceRow(title: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = selected, onClick = null)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }

@@ -10,6 +10,7 @@ import com.google.android.gms.location.*
 import com.movo.rider.network.RiderApi
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.time.Instant
 
 /**
  * Shares the rider's position while they are online, so customers see a live map
@@ -25,7 +26,8 @@ import org.json.JSONObject
  * fallback for the very first fix.
  */
 class RiderLocationService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var currentRequest: com.google.android.gms.tasks.CancellationTokenSource? = null
     private lateinit var client: FusedLocationProviderClient
     private var lastSent: Location? = null
     private var lastAcceptedElapsedMs = 0L
@@ -57,6 +59,7 @@ class RiderLocationService : Service() {
         }
         requestUpdates()
         primeWithLastKnownLocation()
+        acquireFreshLocation()
         startHeartbeat()
         return START_STICKY
     }
@@ -66,7 +69,7 @@ class RiderLocationService : Service() {
         client.requestLocationUpdates(
             LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
                 .setMinUpdateIntervalMillis(intervalMs)
-                .setMinUpdateDistanceMeters(minDistanceM)
+                .setMinUpdateDistanceMeters(0f)
                 .build(),
             callback,
             mainLooper
@@ -104,11 +107,15 @@ class RiderLocationService : Service() {
      * the backend still resolves to the right zone; silence resolves to nothing.
      */
     private fun maybeSend(location: Location, force: Boolean = false) {
+        if (!isFresh(location)) return
         if (!force && !isAcceptable(location)) return
         val last = lastSent
-        if (!force && last != null && location.distanceTo(last) < minDistanceM) return
+        if (!force && !RiderGpsFreshness.shouldPublish(
+                location.elapsedRealtimeNanos / 1_000_000, last?.elapsedRealtimeNanos?.div(1_000_000),
+                last?.let { location.distanceTo(it) } ?: 0f, minDistanceM, intervalMs
+            )) return
         lastSent = location
-        lastAcceptedElapsedMs = android.os.SystemClock.elapsedRealtime()
+        lastAcceptedElapsedMs = location.elapsedRealtimeNanos / 1_000_000
         sendLocation(location)
     }
 
@@ -119,6 +126,11 @@ class RiderLocationService : Service() {
      * as it is inside [MAX_USABLE_ACCURACY_M]. That keeps precision high when GPS is
      * healthy without ever letting the rider silently fall out of dispatch.
      */
+    private fun isFresh(location: Location): Boolean = RiderGpsFreshness.isFresh(
+        location.time, location.elapsedRealtimeNanos / 1_000_000,
+        System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime()
+    )
+
     private fun isAcceptable(location: Location): Boolean {
         if (!location.hasAccuracy()) return true
         if (location.accuracy <= minAccuracyM) return true
@@ -143,7 +155,9 @@ class RiderLocationService : Service() {
             while (isActive) {
                 delay(intervalMs * HEARTBEAT_MULTIPLIER)
                 val last = lastSent
-                if (last != null) maybeSend(last, force = true) else primeWithLastKnownLocation()
+                if (last != null && isFresh(last)) maybeSend(last, force = true)
+                else primeWithLastKnownLocation()
+                acquireFreshLocation()
             }
         }
     }
@@ -151,11 +165,26 @@ class RiderLocationService : Service() {
     private fun sendLocation(location: Location) = scope.launch {
         runCatching {
             val body = JSONObject().put("lat", location.latitude).put("lng", location.longitude)
+                .put("recorded_at", Instant.ofEpochMilli(location.time).toString())
             if (location.hasAccuracy()) body.put("accuracy", location.accuracy)
             RiderApi(applicationContext).put("/api/rider/location", body)
         }.onSuccess { response ->
             response.optJSONObject("tracking")?.let(::applyTracking)
         }
+    }
+
+    private fun acquireFreshLocation() {
+        if (currentRequest != null) return
+        val token = com.google.android.gms.tasks.CancellationTokenSource()
+        currentRequest = token
+        runCatching {
+            client.getCurrentLocation(
+                CurrentLocationRequest.Builder().setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                    .setMaxUpdateAgeMillis(0).setDurationMillis(15_000).build(), token.token
+            ).addOnSuccessListener { location ->
+                if (scope.isActive && location != null) maybeSend(location)
+            }.addOnCompleteListener { currentRequest = null }
+        }.onFailure { currentRequest = null }
     }
 
     /** Adopts the cadence the backend says this rider should be polled at right now. */
@@ -183,6 +212,7 @@ class RiderLocationService : Service() {
             .build()
 
     override fun onDestroy() {
+        currentRequest?.cancel()
         client.removeLocationUpdates(callback)
         heartbeat?.cancel()
         scope.cancel()

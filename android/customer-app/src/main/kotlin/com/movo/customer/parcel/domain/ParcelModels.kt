@@ -11,8 +11,38 @@ data class ParcelDraft(
     val description: String = "", val serviceType: String = "parcel", val paymentMethod: String = "cash", val instructions: String = "",
     val tier: String = "standard", val size: String = "small", val category: String = "general",
     val extraStops: List<ParcelPlace> = emptyList(), val cashOnDelivery: Double = 0.0,
-    val photoUri: String? = null, val notifySms: Boolean = false
+    val photoUri: String? = null, val notifySms: Boolean = false,
+    // The rider the customer picked from the nearby list. Null means "any available
+    // rider", which is the original automatic nearest-rider dispatch.
+    val preferredRiderId: String? = null, val preferredRiderLabel: String? = null
 )
+
+/**
+ * A rider near the pickup that the customer can choose to send with. Carries only what
+ * decides a handover — the plate to look for at the kerb, the rider's standing and how
+ * soon they can arrive. No phone number or legal name: until a rider accepts the job
+ * there is nothing agreed between the two parties.
+ */
+data class NearbyParcelRider(
+    val id: String,
+    val plate: String? = null,
+    val make: String? = null,
+    val type: String? = null,
+    val color: String? = null,
+    val rating: Double = 0.0,
+    val ratingCount: Int = 0,
+    val distanceKm: Double = 0.0,
+    val etaMinutes: Int = 0,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val zone: String? = null,
+    val sameZone: Boolean = false
+) {
+    val label: String get() = plate?.takeIf(String::isNotBlank) ?: "MOVO rider"
+    val vehicle: String get() = listOfNotNull(
+        color?.takeIf(String::isNotBlank), make?.takeIf(String::isNotBlank), type?.takeIf(String::isNotBlank)
+    ).joinToString(" ")
+}
 data class ParcelEstimate(val amount: Double, val distanceKm: Double, val etaMinutes: Int?, val currency: String = "RWF", val isDemo: Boolean = false)
 data class ParcelDelivery(
     val id: String, val reference: String, val status: String, val pickup: ParcelPlace, val destination: ParcelPlace,

@@ -91,6 +91,32 @@ data class PerformanceStats(
     val totalEarnings: Double = 0.0
 )
 
+/**
+ * Whether the platform will actually send this rider work, and why not when it
+ * won't. Being "online" is not the same as being dispatchable: a rider with no GPS
+ * fix yet, or parked outside every service zone, is online and idle forever because
+ * dispatch matches on zone first. The rider has to be told that plainly — otherwise
+ * they sit staring at an empty screen blaming the app.
+ */
+data class DispatchStanding(
+    val zoneName: String? = null,
+    val inServiceArea: Boolean = false,
+    val dispatchable: Boolean = false,
+    val reason: String? = null
+) {
+    /** Rider-facing explanation, or null when they are genuinely receiving offers. */
+    val blockedExplanation: String?
+        get() = when {
+            dispatchable -> null
+            reason == "not_approved" -> "Your account is still being reviewed. You'll receive offers once MOVO approves it."
+            reason == "not_online" -> null
+            reason == "stale_location" -> "Waiting for fresh GPS. Enable location services to receive nearby offers."
+            reason == "no_location_fix" -> "Waiting for GPS. MOVO can't match you to a pickup zone until your location comes through."
+            reason == "outside_service_area" -> "You're outside MOVO's service area. Move into a covered zone to start receiving offers."
+            else -> null
+        }
+}
+
 /** Snapshot rendered by the rider home screen. */
 data class RiderHomeState(
     val profile: RiderProfile = RiderProfile(),
@@ -98,6 +124,7 @@ data class RiderHomeState(
     val activeDelivery: ActiveDelivery? = null,
     val rideOffer: RideOffer? = null,
     val activeRide: ActiveRide? = null,
+    val dispatch: DispatchStanding = DispatchStanding(),
     val serverTime: String? = null,
     val pendingSync: Int = 0
 )

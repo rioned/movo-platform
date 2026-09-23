@@ -217,14 +217,31 @@ private fun IdleSheet(state: RiderHomeState, busy: Boolean, online: Boolean, onG
         elevation = 8.dp
     ) {
         if (state.profile.availability == "online") {
-            StatusPill("ONLINE • READY", MovoTone.Positive)
-            Spacer(Modifier.height(MovoSpacing.small))
-            Text("Waiting for offers", style = MaterialTheme.typography.titleLarge)
-            Text(
-                "You are available for nearby requests. Stay safely parked while waiting.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // "Online" alone is not the promise. Dispatch matches riders to a pickup by
+            // zone first, so a rider with no fix yet — or one sitting outside every
+            // service area — is online and will never be offered anything. Say which.
+            val blocked = state.dispatch.blockedExplanation
+            if (blocked == null) {
+                StatusPill("ONLINE • READY", MovoTone.Positive)
+                Spacer(Modifier.height(MovoSpacing.small))
+                Text("Waiting for offers", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    state.dispatch.zoneName
+                        ?.let { "You are serving $it. Stay safely parked while waiting." }
+                        ?: "You are available for nearby requests. Stay safely parked while waiting.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                StatusPill("ONLINE • NOT MATCHED", MovoTone.Warning)
+                Spacer(Modifier.height(MovoSpacing.small))
+                Text("No zone assigned", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    blocked,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(Modifier.height(MovoSpacing.default))
             com.movo.design.MovoSecondaryButton("Go offline", onGoOffline, enabled = !busy)
         } else {

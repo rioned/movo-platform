@@ -26,6 +26,9 @@ import javax.inject.Inject
     val recipients: List<SavedRecipient> = emptyList(),
     val notices: List<AccountNotice> = emptyList(), val results: List<ParcelPlace> = emptyList(),
     val lastLocation: ParcelPlace? = null, val phone: String = "", val challenge: OtpChallenge? = null,
+    // Riders near the current pickup, for the customer to choose from. Refreshed
+    // whenever the pickup is validated, and re-checked before the order is placed.
+    val nearbyRiders: List<NearbyParcelRider> = emptyList(), val loadingRiders: Boolean = false,
     val resendAt: Long = 0L, val busy: Boolean = false, val searching: Boolean = false, val error: String? = null
 )
 
@@ -38,6 +41,7 @@ class ParcelViewModel @Inject constructor(@ApplicationContext private val contex
     private lateinit var repository: ParcelRepository
     private lateinit var legacyApi: CustomerApi
     private var searchJob: Job? = null
+    private var riderJob: Job? = null
     private var settingsJob: Job? = null
     private var draftSaveJob: Job? = null
     private var demoKey = UUID.randomUUID().toString()
@@ -141,10 +145,54 @@ class ParcelViewModel @Inject constructor(@ApplicationContext private val contex
         if (state.value.demo) {
             require(place.latitude in -2.15..-1.75 && place.longitude in 29.9..30.3) { "Outside demo Kigali service area" }
         } else {
-            val response = legacyApi.get("/api/mobile/v1/customer/nearby-riders?lat=${place.latitude}&lng=${place.longitude}")
-            check(response.getJSONObject("data").optBoolean("in_service_area", false)) { "Outside service area. Choose an address inside MOVO's Kigali zone." }
+            val response = legacyApi.get("/api/mobile/v1/customer/nearby-riders?lat=${place.latitude}&lng=${place.longitude}&radius_km=10")
+            val data = response.getJSONObject("data")
+            check(data.optBoolean("in_service_area", false)) { "Outside service area. Choose an address inside MOVO's Kigali zone." }
+            // The same call already tells us who is around, so the customer can choose a
+            // rider instead of only learning that the address is serviceable.
+            mutable.update { it.copy(nearbyRiders = data.toNearbyRiders()) }
         }
         onAccepted()
+    }
+
+    /**
+     * Refreshes the rider list for the current pickup. Used when the customer opens the
+     * chooser, so a list gathered minutes ago at address-entry time isn't what they pick
+     * from — riders go offline, and a stale choice would be rejected at submit time.
+     */
+    fun refreshNearbyRiders() {
+        val pickup = state.value.draft.pickup ?: return
+        if (state.value.demo) return
+        riderJob?.cancel()
+        mutable.update { it.copy(loadingRiders = true) }
+        riderJob = viewModelScope.launch {
+            runCatching {
+                legacyApi.get("/api/mobile/v1/customer/nearby-riders?lat=${pickup.latitude}&lng=${pickup.longitude}&radius_km=10")
+                    .getJSONObject("data")
+            }.onSuccess { data ->
+                val riders = data.toNearbyRiders()
+                mutable.update { current ->
+                    // A chosen rider who has since gone offline must not stay selected, or
+                    // the create call would be rejected for a rider the customer can no
+                    // longer see.
+                    val keep = current.draft.preferredRiderId?.takeIf { id -> riders.any { it.id == id } }
+                    current.copy(
+                        nearbyRiders = riders,
+                        loadingRiders = false,
+                        draft = if (keep == current.draft.preferredRiderId) current.draft
+                        else current.draft.copy(preferredRiderId = null, preferredRiderLabel = null)
+                    )
+                }
+            }.onFailure {
+                mutable.update { it.copy(loadingRiders = false) }
+            }
+        }
+    }
+
+    /** Records who the customer wants to send with; null restores automatic dispatch. */
+    fun chooseRider(riderId: String?) {
+        val rider = state.value.nearbyRiders.firstOrNull { it.id == riderId }
+        editDraft(state.value.draft.copy(preferredRiderId = rider?.id, preferredRiderLabel = rider?.label))
     }
     fun search(query: String) {
         searchJob?.cancel()
@@ -224,5 +272,33 @@ class ParcelViewModel @Inject constructor(@ApplicationContext private val contex
         check(!state.value.demo) { "No live notifications in demo mode" }
         legacyApi.put("/api/notifications/$id/read", JSONObject())
         mutable.update { it.copy(notices = it.notices.map { n -> if (n.id == id) n.copy(read = true) else n }) }
+    }
+}
+
+/**
+ * Reads the rider list out of a `nearby-riders` payload. An older backend that predates
+ * the chooser simply has no `riders` array, which yields an empty list and leaves the
+ * flow on automatic dispatch rather than breaking the booking.
+ */
+private fun JSONObject.toNearbyRiders(): List<NearbyParcelRider> {
+    val array = optJSONArray("riders") ?: return emptyList()
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
+        NearbyParcelRider(
+            id = id,
+            plate = item.optString("motorcycle_plate").takeIf(String::isNotBlank),
+            make = item.optString("motorcycle_make").takeIf(String::isNotBlank),
+            type = item.optString("motorcycle_type").takeIf(String::isNotBlank),
+            color = item.optString("motorcycle_color").takeIf(String::isNotBlank),
+            rating = item.optDouble("rating", 0.0).takeIf(Double::isFinite) ?: 0.0,
+            ratingCount = item.optInt("rating_count"),
+            distanceKm = item.optDouble("distance_km", 0.0).takeIf(Double::isFinite) ?: 0.0,
+            etaMinutes = item.optInt("eta_minutes"),
+            latitude = item.optDouble("lat").takeIf(Double::isFinite),
+            longitude = item.optDouble("lng").takeIf(Double::isFinite),
+            zone = item.optString("zone").takeIf(String::isNotBlank),
+            sameZone = item.optBoolean("same_zone", false)
+        )
     }
 }

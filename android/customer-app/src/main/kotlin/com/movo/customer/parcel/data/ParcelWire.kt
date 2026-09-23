@@ -23,7 +23,10 @@ internal object ParcelWire {
         validateContacts(d)
         return quoteBody(d) + mapOf("pickup_address" to d.pickup!!.address,"pickup_name" to d.senderName,"pickup_phone" to d.senderPhone,
             "dest_address" to d.destination!!.address,"dest_name" to d.recipientName,"dest_phone" to d.recipientPhone,
-            "item_description" to d.description,"item_category" to d.category,"special_instructions" to d.instructions,"payment_method" to d.paymentMethod)
+            "item_description" to d.description,"item_category" to d.category,"special_instructions" to d.instructions,"payment_method" to d.paymentMethod) +
+            // Only sent when the customer actually picked someone, so "any available
+            // rider" stays the untouched automatic dispatch path.
+            (d.preferredRiderId?.let { mapOf("preferred_rider_id" to it) } ?: emptyMap())
     }
     fun estimate(o: JsonObject) = ParcelEstimate(o.requiredNumber("totalCharge"), o.requiredNumber("distance_km"), o.number("eta_minutes")?.toInt(), o.text("currency") ?: "RWF")
     fun profile(o: JsonObject): ParcelProfile {

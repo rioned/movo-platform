@@ -3,6 +3,7 @@ package com.movo.rider.home
 import com.movo.rider.model.ActiveDelivery
 import com.movo.rider.model.ActiveRide
 import com.movo.rider.model.DeliveryOffer
+import com.movo.rider.model.DispatchStanding
 import com.movo.rider.model.RideOffer
 import com.movo.rider.model.RiderHomeState
 import com.movo.rider.model.RiderProfile
@@ -39,7 +40,11 @@ interface RiderGateway {
  * delivery. Every mutation refetches server state afterwards, so the screen shows
  * what the platform accepted — never an optimistic guess about a delivery stage.
  */
-class RiderController(private val gateway: RiderGateway, private val analytics: AnalyticsLogger = NoOpAnalyticsLogger) {
+class RiderController(
+    private val gateway: RiderGateway,
+    private val analytics: AnalyticsLogger = NoOpAnalyticsLogger,
+    private val prepareOnline: suspend () -> String? = { null }
+) {
     private val mutableState = MutableStateFlow(RiderHomeState())
     val state: StateFlow<RiderHomeState> = mutableState.asStateFlow()
 
@@ -59,9 +64,28 @@ class RiderController(private val gateway: RiderGateway, private val analytics: 
 
     /** Availability changes are rejected by the server mid-delivery; surface that plainly. */
     suspend fun setAvailability(status: String) {
-        runCatching { gateway.put("/api/rider/status", JSONObject().put("status", status)) }
-            .onSuccess {
-                post(RiderMessage.info(if (status == "online") "You are online and receiving offers" else "Availability set to ${status.replace('_', ' ')}"))
+        var locationWarning: String? = null
+        runCatching {
+            locationWarning = if (status == "online") prepareOnline() else null
+            gateway.put("/api/rider/status", JSONObject().put("status", status))
+        }
+            .onSuccess { response ->
+                // Going online is not the same as receiving offers. Dispatch matches on
+                // zone first, so a rider with no GPS fix yet — or one parked outside every
+                // service area — is online and permanently idle. Report what the server
+                // actually said rather than promising work that will never arrive.
+                val dispatchable = response.optBoolean("dispatchable", false)
+                val zoneName = response.optJSONObject("zone")
+                    ?.opt("name")?.takeIf { it != JSONObject.NULL }?.toString()?.takeIf(String::isNotBlank)
+                post(
+                    when {
+                        status != "online" -> RiderMessage.info("Availability set to ${status.replace('_', ' ')}")
+                        locationWarning != null -> RiderMessage.info("You are online. $locationWarning")
+                        dispatchable && zoneName != null -> RiderMessage.info("You are online in $zoneName and receiving offers")
+                        dispatchable -> RiderMessage.info("You are online and receiving offers")
+                        else -> RiderMessage.info("You are online. Waiting for your location so MOVO can place you in a zone.")
+                    }
+                )
                 when (status) {
                     "online" -> analytics.log(AnalyticsEvent.RIDER_WENT_ONLINE)
                     "offline" -> analytics.log(AnalyticsEvent.RIDER_WENT_OFFLINE)
@@ -199,12 +223,19 @@ internal fun JSONObject.toHomeState(pendingSync: Int): RiderHomeState {
     val rideOffers = optJSONArray("rideOffers")
     val rideOffer = if ((rideOffers?.length() ?: 0) > 0) rideOffers!!.getJSONObject(0).toRideOffer() else null
     val activeRide = optJSONObject("activeRide")?.takeIf { it.has("id") }?.toActiveRide()
+    val zone = optJSONObject("zone")
     return RiderHomeState(
         profile = toRiderProfile(),
         offer = offer,
         activeDelivery = active,
         rideOffer = rideOffer,
         activeRide = activeRide,
+        dispatch = DispatchStanding(
+            zoneName = zone?.opt("name")?.takeIf { it != JSONObject.NULL }?.toString()?.takeIf(String::isNotBlank),
+            inServiceArea = zone?.optBoolean("in_service_area", false) ?: false,
+            dispatchable = optBoolean("dispatchable", false),
+            reason = opt("reason")?.takeIf { it != JSONObject.NULL }?.toString()?.takeIf(String::isNotBlank)
+        ),
         serverTime = optString("serverTime").takeIf(String::isNotBlank),
         pendingSync = pendingSync
     )

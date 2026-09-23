@@ -79,6 +79,13 @@ function loadRuntimeConfig(env = process.env) {
     // value against a fixed mode allowlist), so this credential lives alongside it,
     // not inside it.
     maptilerApiKey: env['MAPTILER_API_KEY'] || '',
+    // SMS credentials for SMS_PROVIDER=twilio (src/services/messaging.js).
+    twilio: {
+      accountSid: env.TWILIO_ACCOUNT_SID || '',
+      authToken: env.TWILIO_AUTH_TOKEN || '',
+      from: env.TWILIO_FROM || '',
+      messagingServiceSid: env.TWILIO_MESSAGING_SERVICE_SID || ''
+    },
     // Server-side location-suggestion mixer (src/services/geocoding.js): 'osm' uses
     // Nominatim/MapTiler only (free/cheap, no Google spend); 'hybrid' adds Google
     // Places on top when GOOGLE_PLACES_API_KEY is set, for richer named-business
@@ -117,6 +124,10 @@ function evaluateReadiness(config, dependencies) {
     if (config.jwtSecretGenerated) failures.push('production JWT secret was auto-generated because JWT_SECRET is unset');
     if (config.otpTestMode) failures.push('OTP test mode is enabled');
     if (!config.rateLimit.enabled) failures.push('rate limiting is disabled');
+    const twilio = config.twilio || {};
+    if (config.providers.sms === 'twilio' && (!twilio.accountSid || !twilio.authToken || (!twilio.from && !twilio.messagingServiceSid))) {
+      failures.push('SMS_PROVIDER=twilio but Twilio credentials are incomplete');
+    }
   }
   return { ready: failures.length === 0, failures };
 }

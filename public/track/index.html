@@ -27,19 +27,22 @@
 (function () {
   const token = location.pathname.split('/').filter(Boolean).pop();
   const card = document.getElementById('card');
+  // Every field below is user-supplied (names, addresses, vehicle details) and this
+  // page is public, so nothing reaches innerHTML unescaped.
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
   function render(data) {
     const driver = data.driver;
     card.innerHTML = `
-      <h1>${data.rider_name}'s trip</h1>
-      <span class="status">${data.status.replace(/_/g, ' ')}</span>
-      <div class="row"><span class="label">Pickup</span><span>${data.pickup_address}</span></div>
-      <div class="row"><span class="label">Destination</span><span>${data.dest_address}</span></div>
+      <h1>${esc(data.rider_name)}'s trip</h1>
+      <span class="status">${esc(String(data.status).replace(/_/g, ' '))}</span>
+      <div class="row"><span class="label">Pickup</span><span>${esc(data.pickup_address)}</span></div>
+      <div class="row"><span class="label">Destination</span><span>${esc(data.dest_address)}</span></div>
       ${driver ? `
       <div class="driver">
-        <div class="row"><span class="label">Driver</span><span>${driver.name || 'Assigned'}</span></div>
-        ${driver.car_model ? `<div class="row"><span class="label">Vehicle</span><span>${driver.car_color || ''} ${driver.car_make || ''} ${driver.car_model || ''}</span></div>` : ''}
-        ${driver.plate ? `<div class="row"><span class="label">Plate</span><span>${driver.plate}</span></div>` : ''}
+        <div class="row"><span class="label">Driver</span><span>${esc(driver.name || 'Assigned')}</span></div>
+        ${driver.car_model ? `<div class="row"><span class="label">Vehicle</span><span>${esc(driver.car_color)} ${esc(driver.car_make)} ${esc(driver.car_model)}</span></div>` : ''}
+        ${driver.plate ? `<div class="row"><span class="label">Plate</span><span>${esc(driver.plate)}</span></div>` : ''}
       </div>` : `<p class="muted">Waiting for a driver to be assigned…</p>`}
       <p class="muted">This is a live, read-only view shared for safety. It updates automatically.</p>
     `;
@@ -52,7 +55,7 @@
       if (!body.success) throw new Error(body.error || 'Trip not found');
       render(body.data);
     } catch (err) {
-      card.innerHTML = `<h1>Trip unavailable</h1><p class="error">${err.message}</p>`;
+      card.innerHTML = `<h1>Trip unavailable</h1><p class="error">${esc(err.message)}</p>`;
     }
   }
 

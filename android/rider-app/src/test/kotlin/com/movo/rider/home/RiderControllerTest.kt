@@ -262,3 +262,76 @@ class OfferCountdownTest {
         assertEquals("delivery-1", offer.deliveryId)
     }
 }
+
+/**
+ * Zone-aware dispatch standing. Being "online" is not the same as being matched:
+ * dispatch pairs a pickup with riders in its own zone first, so a rider with no GPS
+ * fix, or one parked outside every service area, is online and permanently idle.
+ * The app must say so instead of promising offers that can never arrive.
+ */
+class RiderDispatchStandingTest {
+    private fun payloadWith(zone: JSONObject?, dispatchable: Boolean, reason: String?): JSONObject =
+        homePayload().also { payload ->
+            zone?.let { payload.put("zone", it) }
+            payload.put("dispatchable", dispatchable)
+            reason?.let { payload.put("reason", it) }
+        }
+
+    @Test
+    fun `a dispatchable rider names the zone they are serving and shows no warning`() {
+        val state = payloadWith(
+            JSONObject().put("id", "z1").put("name", "City Center / Kacyiru").put("in_service_area", true),
+            dispatchable = true,
+            reason = null
+        ).toHomeState(pendingSync = 0)
+
+        assertTrue(state.dispatch.dispatchable)
+        assertTrue(state.dispatch.inServiceArea)
+        assertEquals("City Center / Kacyiru", state.dispatch.zoneName)
+        assertNull(state.dispatch.blockedExplanation, "a matched rider needs no explanation")
+    }
+
+    @Test
+    fun `a rider with no location fix is told why no offers arrive`() {
+        val state = payloadWith(
+            JSONObject().put("id", JSONObject.NULL).put("name", JSONObject.NULL).put("in_service_area", false),
+            dispatchable = false,
+            reason = "no_location_fix"
+        ).toHomeState(pendingSync = 0)
+
+        assertFalse(state.dispatch.dispatchable)
+        assertNull(state.dispatch.zoneName)
+        assertNotNull(state.dispatch.blockedExplanation)
+        assertTrue(state.dispatch.blockedExplanation!!.contains("GPS"), "the rider is told the fix is missing")
+    }
+
+    @Test
+    fun `a rider outside every service area is told to move into a covered zone`() {
+        val state = payloadWith(
+            JSONObject().put("in_service_area", false),
+            dispatchable = false,
+            reason = "outside_service_area"
+        ).toHomeState(pendingSync = 0)
+
+        assertFalse(state.dispatch.dispatchable)
+        assertNotNull(state.dispatch.blockedExplanation)
+        assertTrue(state.dispatch.blockedExplanation!!.contains("service area"))
+    }
+
+    @Test
+    fun `an offline rider is not nagged about zones`() {
+        // Offline is a deliberate choice, not a fault to explain away.
+        val state = payloadWith(null, dispatchable = false, reason = "not_online").toHomeState(pendingSync = 0)
+        assertFalse(state.dispatch.dispatchable)
+        assertNull(state.dispatch.blockedExplanation)
+    }
+
+    @Test
+    fun `an older backend without the dispatch fields degrades to not-blocked`() {
+        // The field is absent on an un-upgraded server; the app must not invent a
+        // warning for a rider who is in fact working normally.
+        val state = homePayload().toHomeState(pendingSync = 0)
+        assertFalse(state.dispatch.dispatchable)
+        assertNull(state.dispatch.blockedExplanation, "no reason means no fabricated warning")
+    }
+}

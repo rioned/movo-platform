@@ -70,7 +70,10 @@ class MainActivity : ComponentActivity() {
     private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
             val state = controller.state.value
-            startLocationSharingIfOnline(state.activeDelivery != null || state.activeRide != null)
+            val hasActiveWork = state.activeDelivery != null || state.activeRide != null
+            if (authenticated && (state.profile.isOnline || hasActiveWork)) startLocationSharingIfOnline(hasActiveWork)
+        } else {
+            android.widget.Toast.makeText(this, "Location permission denied. Enable precise location to share GPS and receive offers.", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
@@ -97,7 +100,8 @@ class MainActivity : ComponentActivity() {
                 override suspend fun syncPending() = api.syncPending()
                 override fun pendingCount() = api.pendingCount()
             },
-            analytics = RiderAnalytics(api)
+            analytics = RiderAnalytics(api),
+            prepareOnline = ::prepareOnlineLocation
         )
         authenticated = api.isAuthenticated
         if (authenticated) refresh()
@@ -146,6 +150,44 @@ class MainActivity : ComponentActivity() {
         if (!granted) { requestLocationPermission(); return }
         val intent = Intent(this, RiderLocationService::class.java).putExtra(RiderLocationService.EXTRA_ACTIVE_WORK, hasActiveWork)
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    /** Bounded acquisition before online; permission/GPS failure never fabricates a fix. */
+    private suspend fun prepareOnlineLocation(): String? {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestLocationPermission()
+            return "Waiting for location permission and fresh GPS before matching offers."
+        }
+        val token = com.google.android.gms.tasks.CancellationTokenSource()
+        return try {
+            val location = kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                kotlinx.coroutines.suspendCancellableCoroutine<android.location.Location?> { continuation ->
+                    continuation.invokeOnCancellation { token.cancel() }
+                    com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(this@MainActivity)
+                        .getCurrentLocation(
+                            com.google.android.gms.location.CurrentLocationRequest.Builder()
+                                .setPriority(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY)
+                                .setMaxUpdateAgeMillis(0).setDurationMillis(8_000).build(), token.token
+                        ).addOnSuccessListener { if (continuation.isActive) continuation.resumeWith(Result.success(it)) }
+                        .addOnFailureListener { if (continuation.isActive) continuation.resumeWith(Result.success(null)) }
+                }
+            }
+            if (location == null || !RiderGpsFreshness.isFresh(location.time, location.elapsedRealtimeNanos / 1_000_000,
+                    System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())) {
+                "Waiting for fresh GPS. Check location services; matching needs a fresh fix."
+            } else {
+                api.put("/api/rider/location", JSONObject().put("lat", location.latitude).put("lng", location.longitude)
+                    .put("recorded_at", java.time.Instant.ofEpochMilli(location.time).toString())
+                    .apply { if (location.hasAccuracy()) put("accuracy", location.accuracy) })
+                null
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            "GPS could not be shared. Waiting for a fresh location before matching offers."
+        } finally {
+            token.cancel()
+        }
     }
 
     private fun stopLocationSharing() = stopService(Intent(this, RiderLocationService::class.java))
@@ -268,7 +310,7 @@ class MainActivity : ComponentActivity() {
         // is actually active, loose polling while merely available-and-idle (spec §13.6).
         val hasActiveWork = state.activeDelivery != null || state.activeRide != null
         LaunchedEffect(state.profile.isOnline, hasActiveWork) {
-            if (state.profile.isOnline) startLocationSharingIfOnline(hasActiveWork) else stopLocationSharing()
+            if (state.profile.isOnline || hasActiveWork) startLocationSharingIfOnline(hasActiveWork) else stopLocationSharing()
         }
         LaunchedEffect(message) {
             message?.let {
