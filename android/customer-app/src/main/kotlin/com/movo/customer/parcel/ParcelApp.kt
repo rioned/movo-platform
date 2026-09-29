@@ -68,6 +68,19 @@ private fun ParcelDelivery.account() = AccountOrder(id, status, pickup.address, 
     }
     val notificationsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    // Keeps the customer's service zone current while they move around: every five
+    // minutes (when location permission is already granted) the phone's fix is sent
+    // to the backend, which re-places the customer in the zone they are now in.
+    LaunchedEffect(state.profile != null) {
+        if (state.profile == null) return@LaunchedEffect
+        while (isActive) {
+            val granted = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+                .any { androidx.core.content.ContextCompat.checkSelfPermission(context, it) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+            if (granted) CustomerLocation(context).requestCurrent { result -> result.onSuccess { point -> viewModel.syncZone(point.latitude, point.longitude) } }
+            delay(ZONE_SYNC_INTERVAL_MS)
+        }
+    }
+
     LaunchedEffect(state.ready) {
         if (state.ready && current == "splash") go(if (state.profile != null) "home" else if (state.onboarded) "phone" else "onboarding")
     }
@@ -209,3 +222,6 @@ private fun ParcelDelivery.account() = AccountOrder(id, status, pickup.address, 
         TextButton(onClick = onLogout) { Text("Logout") }
     }
 }
+
+/** How often the customer's GPS is re-sent so the backend can re-zone them. */
+private const val ZONE_SYNC_INTERVAL_MS = 5 * 60 * 1000L

@@ -139,7 +139,27 @@ class ParcelViewModel @Inject constructor(@ApplicationContext private val contex
         draftSaveJob?.cancel()
         if (!state.value.demo) draftSaveJob = viewModelScope.launch { delay(300); journey.saveDraft(draft) }
     }
-    fun setLocation(place: ParcelPlace) { mutable.update { it.copy(lastLocation = place) }; viewModelScope.launch { journey.setLocation(place) } }
+    fun setLocation(place: ParcelPlace) {
+        mutable.update { it.copy(lastLocation = place) }
+        viewModelScope.launch {
+            journey.setLocation(place)
+            syncZone(place.latitude, place.longitude)
+        }
+    }
+
+    /**
+     * Sends a GPS fix to the backend, which places the customer in the service zone it
+     * falls in; rider search starts from that zone. Best effort: a failed post only
+     * means the next search uses the explicit pickup point instead.
+     */
+    fun syncZone(latitude: Double, longitude: Double) {
+        if (state.value.demo || !::legacyApi.isInitialized) return
+        viewModelScope.launch {
+            runCatching {
+                legacyApi.put("/api/mobile/v1/customer/location", JSONObject().put("lat", latitude).put("lng", longitude))
+            }
+        }
+    }
     fun validatePlace(place: ParcelPlace, onAccepted: () -> Unit) = action {
         require(place.latitude.isFinite() && place.longitude.isFinite()) { "Invalid map location" }
         if (state.value.demo) {

@@ -455,6 +455,17 @@ for (const migration of [
   }
 }
 db.exec(`
+  -- A customer's last GPS fix and the service zone it was placed in at ingest.
+  CREATE TABLE IF NOT EXISTS customer_positions (
+    user_id TEXT PRIMARY KEY REFERENCES users(id),
+    lat REAL NOT NULL,
+    lng REAL NOT NULL,
+    accuracy REAL,
+    zone_id TEXT,
+    zone_name TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS incidents (
     id TEXT PRIMARY KEY,
     delivery_id TEXT,
@@ -664,9 +675,16 @@ function seedData() {
       ['platform_fee_percent','20'],['min_ride_price','800'],['cancel_fee_customer',500],
       ['cancel_fee_rider',0],['waiting_fee_per_min',100],['max_waiting_free_min',5],
       ['rider_accept_timeout_sec',30],['rider_search_radius_km',5],['rider_search_expand_km',2],
-      // How many zones outward dispatch may walk when the pickup's own zone has no
-      // free rider: 0 = own zone only, 3 = own zone plus the three nearest others.
+      // How many neighbour rings rider search may walk when the pickup's own zone
+      // has no free rider: 0 = own zone only, 1 = plus the zones next door, 2 = plus
+      // their neighbours, and so on.
       ['rider_search_max_zone_depth','3'],
+      // A position this far (km) outside every zone is still placed in the nearest one.
+      ['zone_snap_tolerance_km','0.5'],
+      // Zones whose edges are within this many km of each other are neighbours.
+      ['zone_neighbour_gap_km','1'],
+      // How often (seconds) every rider and customer is re-placed in a zone.
+      ['zone_refresh_interval_sec','300'],
       ['currency','RWF'],['currency_symbol','FRW'],
       // Rider location tracking cadence (spec §13.6): tighter while a delivery/ride is
       // active, looser while the rider is just available and idle, so idle phones aren't
@@ -927,33 +945,66 @@ function pointInZone(lat, lng, zone) {
   return zoneMatchScore(lat, lng, zone) !== null;
 }
 
-/**
- * Resolves the service zone a coordinate falls in, or null if it falls outside
- * every active zone. There is deliberately no "nearest zone" fallback: silently
- * mapping an out-of-area point to the closest zone would let customers create
- * deliveries anywhere on the map and would misprice/misdispatch them. Callers
- * must treat null as "MOVO is not currently available at this location."
- *
- * Where zones overlap the best-fitting one wins (see zoneMatchScore); ties are
- * broken by `sort_order` so the same coordinate always resolves to the same zone.
- *
- * `zones` may be a pre-loaded active-zone list, so a caller ranking a whole
- * candidate pool reads the table once instead of once per rider.
- */
 function activeZones() {
   return db.prepare('SELECT * FROM delivery_zones WHERE is_active=1 ORDER BY sort_order').all();
 }
 
-function findZone(lat, lng, zones = null) {
+/**
+ * How far outside every zone a position may sit and still be placed in the
+ * nearest one. Circular service areas leave slivers between them inside the city
+ * (and a phone's fix wobbles across a boundary), so a rider or customer standing
+ * a few hundred metres off an edge belongs to that zone rather than to nowhere.
+ * Bounded on purpose: a point genuinely far from every zone is still out of the
+ * service area, so nobody can quote or dispatch from anywhere on the map.
+ */
+function zoneSnapToleranceKm() {
+  const value = parseFloat(getConfig('zone_snap_tolerance_km', '0.5'));
+  return Number.isFinite(value) && value >= 0 ? value : 0.5;
+}
+
+/**
+ * Places a coordinate in a service zone.
+ *
+ * A zone that contains the point always wins; where zones overlap the
+ * best-fitting one wins (see zoneMatchScore), ties broken by `sort_order` so the
+ * same coordinate always resolves to the same zone. Only when no zone contains
+ * the point is it placed in the nearest zone whose edge lies within the snap
+ * tolerance. Beyond that the point is outside the service area (zone null), and
+ * callers must treat that as "MOVO is not currently available at this location."
+ *
+ * `placement` records which rule placed the point ('inside' or 'nearest'), and
+ * `distance_km` how far outside the zone's edge it was (0 when inside).
+ *
+ * `zones` may be a pre-loaded active-zone list, so a caller ranking a whole
+ * candidate pool reads the table once instead of once per rider.
+ */
+function locateZone(lat, lng, zones = null, snapKm = null) {
+  const pool = zones || activeZones();
   let best = null;
   let bestScore = Infinity;
-  for (const zone of (zones || activeZones())) {
+  for (const zone of pool) {
     const score = zoneMatchScore(lat, lng, zone);
     if (score === null || score >= bestScore) continue;
     best = zone;
     bestScore = score;
   }
-  return best;
+  if (best) return { zone: best, placement: 'inside', distance_km: 0 };
+
+  const tolerance = snapKm === null ? zoneSnapToleranceKm() : snapKm;
+  let nearest = null;
+  let nearestKm = Infinity;
+  for (const zone of pool) {
+    const gap = distanceToZone(lat, lng, zone);
+    if (gap < nearestKm) { nearest = zone; nearestKm = gap; }
+  }
+  if (nearest && nearestKm <= tolerance) {
+    return { zone: nearest, placement: 'nearest', distance_km: Math.round(nearestKm * 1000) / 1000 };
+  }
+  return { zone: null, placement: 'outside', distance_km: Number.isFinite(nearestKm) ? Math.round(nearestKm * 1000) / 1000 : null };
+}
+
+function findZone(lat, lng, zones = null, snapKm = null) {
+  return locateZone(lat, lng, zones, snapKm).zone;
 }
 
 /**
@@ -966,10 +1017,10 @@ function findZone(lat, lng, zones = null) {
  * undispatchable. So NULL falls back to resolving the stored coordinates; only a
  * rider whose position genuinely resolves to no zone is out of the service area.
  */
-function riderZoneId(rider, zones) {
+function riderZoneId(rider, zones, snapKm = null) {
   if (rider.current_zone_id) return rider.current_zone_id;
   if (!Number.isFinite(rider.current_lat) || !Number.isFinite(rider.current_lng)) return null;
-  return findZone(rider.current_lat, rider.current_lng, zones)?.id || null;
+  return findZone(rider.current_lat, rider.current_lng, zones, snapKm)?.id || null;
 }
 
 /**
@@ -1036,29 +1087,133 @@ function distanceToZone(lat, lng, zone) {
 }
 
 /**
- * Orders every active zone by how near it is to a pickup point: index 0 is the
- * pickup's own zone, index 1 the next nearest service area, and so on.
+ * The outer rings of a zone's drawn boundary as [lng,lat] arrays, or null for a
+ * circular zone (or a boundary that does not parse).
+ */
+function zoneOuterRings(zone) {
+  if (!zone.boundary_geojson) return null;
+  let geom;
+  try { geom = JSON.parse(zone.boundary_geojson); } catch { return null; }
+  if (!geom) return null;
+  const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+  const rings = (polygons || []).map(poly => poly && poly[0]).filter(ring => Array.isArray(ring) && ring.length >= 3);
+  return rings.length ? rings : null;
+}
+
+function segmentsCross(a, b, c, d) {
+  const orient = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+  const o1 = orient(a, b, c), o2 = orient(a, b, d), o3 = orient(c, d, a), o4 = orient(c, d, b);
+  return o1 !== o2 && o3 !== o4;
+}
+
+/**
+ * Edge-to-edge distance in km between two zones' service areas; 0 when they
+ * overlap or touch.
+ *
+ * A circle's distance to anything is its center's distance minus its radius. Two
+ * drawn boundaries that neither cross nor contain each other are closest at a
+ * vertex of one of them (the nearest points of two disjoint segments always
+ * include an endpoint), so measuring every vertex against the other boundary's
+ * edges is exact rather than an approximation.
+ */
+function zoneGapKm(a, b) {
+  const ringsA = zoneOuterRings(a);
+  const ringsB = zoneOuterRings(b);
+  if (!ringsA) return Math.max(0, distanceToZone(a.center_lat, a.center_lng, b) - (Number(a.radius_km) || 0));
+  if (!ringsB) return Math.max(0, distanceToZone(b.center_lat, b.center_lng, a) - (Number(b.radius_km) || 0));
+  for (const ra of ringsA) {
+    for (const rb of ringsB) {
+      for (let i = 0; i < ra.length; i += 1) {
+        const a1 = ra[i], a2 = ra[(i + 1) % ra.length];
+        for (let j = 0; j < rb.length; j += 1) {
+          if (segmentsCross(a1, a2, rb[j], rb[(j + 1) % rb.length])) return 0;
+        }
+      }
+    }
+  }
+  let nearest = Infinity;
+  for (const ring of ringsA) for (const [vLng, vLat] of ring) nearest = Math.min(nearest, distanceToZone(vLat, vLng, b));
+  for (const ring of ringsB) for (const [vLng, vLat] of ring) nearest = Math.min(nearest, distanceToZone(vLat, vLng, a));
+  return nearest;
+}
+
+/**
+ * How far apart two zones' edges may be and still count as neighbours. Circular
+ * service areas rarely tile exactly, so two suburbs separated by a thin unzoned
+ * sliver are still next door to each other for the purpose of finding a rider.
+ */
+function zoneNeighbourGapKm() {
+  const value = parseFloat(getConfig('zone_neighbour_gap_km', '1'));
+  return Number.isFinite(value) && value >= 0 ? value : 1;
+}
+
+let zoneGraphCache = { key: null, graph: null };
+
+/**
+ * The zone adjacency graph: zone id -> Set of neighbouring zone ids. Two zones
+ * are neighbours when their service areas overlap, touch, or sit within the
+ * neighbour gap of each other. Pairwise geometry is not free for drawn
+ * boundaries, so the graph is memoised against the exact zone layout it was built
+ * from and rebuilt the moment any zone's geometry or activation changes.
+ */
+function zoneNeighbourGraph(zones, gapKm = zoneNeighbourGapKm()) {
+  const key = gapKm + '#' + zones.map(zone => [zone.id, zone.center_lat, zone.center_lng, zone.radius_km, zone.boundary_geojson || ''].join('|')).join(';');
+  if (zoneGraphCache.key === key) return zoneGraphCache.graph;
+  const graph = new Map(zones.map(zone => [zone.id, new Set()]));
+  for (let i = 0; i < zones.length; i += 1) {
+    for (let j = i + 1; j < zones.length; j += 1) {
+      if (zoneGapKm(zones[i], zones[j]) <= gapKm) {
+        graph.get(zones[i].id).add(zones[j].id);
+        graph.get(zones[j].id).add(zones[i].id);
+      }
+    }
+  }
+  zoneGraphCache = { key, graph };
+  return graph;
+}
+
+/**
+ * Orders every active zone into search rings around a pickup point: ring 0 is
+ * the pickup's own zone, ring 1 its neighbouring zones, ring 2 the neighbours of
+ * those, and so on outward across the zone graph.
  *
  * This is what makes rider search "everyone in the pickup's zone first, then the
- * next zone over" instead of a flat radius sweep, which treats a rider sitting
- * across a river in an unrelated zone exactly like the one in the neighbouring
- * suburb. The pickup's own zone is pinned to the front because overlapping zones
- * all measure 0 km from a point they contain.
+ * zones next door, then the zones next door to those" instead of a flat radius
+ * sweep, which treats a rider sitting across a river in an unrelated zone exactly
+ * like the one in the neighbouring suburb. When a ring has no further neighbours
+ * but zones remain unreached (a detached service area), the walk continues at the
+ * nearest unreached zone to the pickup, so the expansion never dead-ends early.
+ *
+ * `rankById` maps a zone id to its ring; riders outside every zone rank behind all.
  */
 function zoneSearchOrder(lat, lng, pickupZoneId) {
   const zones = activeZones();
+  const graph = zoneNeighbourGraph(zones);
+  const distanceById = new Map(zones.map(zone => [zone.id, zone.id === pickupZoneId ? -1 : distanceToZone(lat, lng, zone)]));
+  const byNearness = (a, b) => distanceById.get(a.id) - distanceById.get(b.id) || (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+  const rankById = new Map();
+  let ring = 0;
+  let frontier = zones.filter(zone => zone.id === pickupZoneId);
+  frontier.forEach(zone => rankById.set(zone.id, 0));
+  while (rankById.size < zones.length) {
+    const nextRing = frontier.length ? ring + 1 : ring;
+    let next = zones.filter(zone => !rankById.has(zone.id) && frontier.some(from => graph.get(from.id)?.has(zone.id)));
+    if (!next.length) next = [zones.filter(zone => !rankById.has(zone.id)).sort(byNearness)[0]];
+    next.forEach(zone => rankById.set(zone.id, nextRing));
+    frontier = next;
+    ring = nextRing;
+  }
   const ranked = zones
     .map(zone => ({
       id: zone.id,
       name: zone.name,
+      ring: rankById.get(zone.id),
       sort_order: Number(zone.sort_order) || 0,
-      distance_km: zone.id === pickupZoneId ? -1 : distanceToZone(lat, lng, zone)
+      distance_km: Math.max(0, Math.round(distanceById.get(zone.id) * 1000) / 1000)
     }))
-    .sort((a, b) => a.distance_km - b.distance_km || a.sort_order - b.sort_order);
-  const rankById = new Map();
-  ranked.forEach((zone, index) => rankById.set(zone.id, index));
-  // Riders sitting outside every service area rank behind every zoned rider.
-  return { zones, ranked, rankById, outOfZoneRank: ranked.length };
+    .sort((a, b) => a.ring - b.ring || a.distance_km - b.distance_km || a.sort_order - b.sort_order);
+  const ringCount = ranked.length ? ranked[ranked.length - 1].ring + 1 : 0;
+  return { zones, ranked, rankById, ringCount, outOfZoneRank: ringCount };
 }
 
 /**
@@ -1068,15 +1223,53 @@ function zoneSearchOrder(lat, lng, pickupZoneId) {
  * ping. Called after an admin changes the zone layout.
  */
 function refreshRiderZones() {
-  const riders = db.prepare('SELECT user_id,current_lat,current_lng FROM riders WHERE current_lat IS NOT NULL AND current_lng IS NOT NULL').all();
+  const zones = activeZones();
+  const snapKm = zoneSnapToleranceKm();
+  // Only riders available for work hold a zone; busy (on a job), offline and
+  // unavailable riders are left unzoned until they come back into the pool.
+  db.prepare("UPDATE riders SET current_zone_id=NULL,current_zone_name=NULL WHERE online_status!='online' AND current_zone_id IS NOT NULL").run();
+  const riders = db.prepare("SELECT user_id,current_lat,current_lng FROM riders WHERE online_status='online' AND current_lat IS NOT NULL AND current_lng IS NOT NULL").all();
   const update = db.prepare('UPDATE riders SET current_zone_id=?,current_zone_name=? WHERE user_id=?');
   let reassigned = 0;
   for (const rider of riders) {
-    const zone = resolveZoneAt(rider.current_lat, rider.current_lng);
-    update.run(zone.id, zone.name, rider.user_id);
+    const zone = findZone(rider.current_lat, rider.current_lng, zones, snapKm);
+    update.run(zone?.id || null, zone?.name || null, rider.user_id);
     reassigned += 1;
   }
+  // Customers are placed in zones from their GPS too, so the same map change moves them.
+  const customers = db.prepare('SELECT user_id,lat,lng FROM customer_positions').all();
+  const updateCustomer = db.prepare('UPDATE customer_positions SET zone_id=?,zone_name=? WHERE user_id=?');
+  for (const customer of customers) {
+    const zone = findZone(customer.lat, customer.lng, zones, snapKm);
+    updateCustomer.run(zone?.id || null, zone?.name || null, customer.user_id);
+  }
   return reassigned;
+}
+
+/**
+ * Places a customer in a service zone from their GPS fix. The customer's zone is
+ * what their rider search starts from when they have not chosen a pickup point
+ * elsewhere, so it is resolved and stored the moment the fix arrives, exactly
+ * like a rider's.
+ */
+function recordCustomerPosition(customerId, lat, lng, { accuracy = null } = {}) {
+  const zone = resolveZoneAt(lat, lng);
+  const fixAccuracy = Number.isFinite(accuracy) ? accuracy : null;
+  db.prepare(`INSERT INTO customer_positions (user_id,lat,lng,accuracy,zone_id,zone_name,updated_at)
+      VALUES (?,?,?,?,?,?,datetime('now'))
+      ON CONFLICT(user_id) DO UPDATE SET lat=excluded.lat,lng=excluded.lng,accuracy=excluded.accuracy,
+        zone_id=excluded.zone_id,zone_name=excluded.zone_name,updated_at=excluded.updated_at`)
+    .run(customerId, lat, lng, fixAccuracy, zone.id, zone.name);
+  return zone;
+}
+
+/** The client-facing view of a resolved zone. */
+function zoneDescriptor(zone) {
+  return {
+    id: zone.id, name: zone.name, in_service_area: zone.in_service_area,
+    placement: zone.placement || (zone.in_service_area ? 'inside' : 'outside'),
+    distance_km: zone.distance_km ?? null
+  };
 }
 
 /**
@@ -1090,14 +1283,24 @@ function refreshRiderZones() {
  * is parked outside every zone and is visible to operations but not dispatchable.
  */
 function recordRiderPosition(riderId, lat, lng, { accuracy = null, deliveryId = null, rideId = null } = {}) {
-  const zone = resolveZoneAt(lat, lng);
+  const resolved = resolveZoneAt(lat, lng);
   const fixAccuracy = Number.isFinite(accuracy) ? accuracy : null;
+  // Only a rider who is available holds a zone. A busy rider (on a job) keeps
+  // streaming position for tracking, but stays unzoned until the job ends.
+  const available = db.prepare('SELECT online_status FROM riders WHERE user_id=?').get(riderId)?.online_status === 'online';
+  const zone = available ? resolved : unzonedOnJob();
   db.prepare(`UPDATE riders SET current_lat=?,current_lng=?,current_zone_id=?,current_zone_name=?,
       last_location_accuracy=?,last_location_update=datetime('now') WHERE user_id=?`)
     .run(lat, lng, zone.id, zone.name, fixAccuracy, riderId);
+  // The location log records the zone the point lies in, for history and analytics.
   db.prepare('INSERT INTO rider_locations (id,rider_id,delivery_id,ride_id,lat,lng,zone_id,accuracy) VALUES (?,?,?,?,?,?,?,?)')
-    .run(uuidv4(), riderId, deliveryId, rideId, lat, lng, zone.id, fixAccuracy);
+    .run(uuidv4(), riderId, deliveryId, rideId, lat, lng, resolved.id, fixAccuracy);
   return zone;
+}
+
+/** The zone descriptor for a rider who is busy on a job and so holds no zone. */
+function unzonedOnJob() {
+  return { zone: null, id: null, name: null, in_service_area: false, placement: 'on_job', distance_km: null };
 }
 
 /**
@@ -1109,6 +1312,31 @@ function recordRiderPosition(riderId, lat, lng, { accuracy = null, deliveryId = 
  * re-resolving would put them back in the pool advertising their pre-job zone, so
  * they would be offered work in a zone they have since left.
  */
+/**
+ * Takes a rider out of the dispatch pool the moment they commit to a job: marked
+ * busy, and holding no zone until the job ends. A rider on a job is not available
+ * to anyone in any zone, so leaving them zoned would let every zone-based view
+ * (discovery, zone headcounts, a status reset) treat them as part of that zone's
+ * pool. Their GPS is still recorded throughout the job — only the zone is withheld
+ * — and returnRiderToPool re-zones them wherever the job leaves them.
+ */
+function markRiderBusy(riderId, extraSets = '') {
+  if (!riderId) return;
+  db.prepare(`UPDATE riders SET online_status='busy',availability='busy',current_zone_id=NULL,current_zone_name=NULL${extraSets ? ',' + extraSets : ''},updated_at=datetime('now') WHERE user_id=?`)
+    .run(riderId);
+}
+
+/** Returns a busy rider to the pool once they hold no open delivery or ride. */
+function releaseRiderIfIdle(riderId) {
+  if (!riderId) return null;
+  const rider = db.prepare('SELECT online_status FROM riders WHERE user_id=?').get(riderId);
+  if (rider?.online_status !== 'busy') return null;
+  const openDelivery = db.prepare("SELECT id FROM deliveries WHERE rider_id=? AND status NOT IN ('delivered','cancelled','failed')").get(riderId);
+  const openRide = db.prepare("SELECT id FROM rides WHERE driver_id=? AND status NOT IN ('completed','cancelled')").get(riderId);
+  if (openDelivery || openRide) return null;
+  return returnRiderToPool(riderId);
+}
+
 function returnRiderToPool(riderId, extraSets = '') {
   if (!riderId) return null;
   db.prepare(`UPDATE riders SET online_status='online',availability='online'${extraSets ? ',' + extraSets : ''},updated_at=datetime('now') WHERE user_id=?`)
@@ -1130,21 +1358,23 @@ function returnRiderToPool(riderId, extraSets = '') {
  * but is not offered work for a pickup in a zone they don't serve).
  */
 function resolveZoneAt(lat, lng) {
-  const zone = findZone(lat, lng);
+  const { zone, placement, distance_km } = locateZone(lat, lng);
   return {
     zone,
     id: zone ? zone.id : null,
     name: zone ? zone.name : null,
-    in_service_area: Boolean(zone)
+    in_service_area: Boolean(zone),
+    placement,
+    distance_km
   };
 }
 
 /**
  * Ranks one candidate rider against a pickup, zone first and distance second.
  *
- * The tier is the rider's zone's position in the pickup's zone search order:
- * tier 0 is the pickup's own zone, tier 1 the next nearest service area, and so
- * on, with riders outside every zone behind all of them. Raw distance only ever
+ * The tier is the ring the rider's zone sits in around the pickup: tier 0 is the
+ * pickup's own zone, tier 1 its neighbouring zones, tier 2 their neighbours, and
+ * so on, with riders outside every zone behind all of them. Raw distance only ever
  * breaks ties *within* a tier — a rider 2 km away across a zone boundary is a
  * worse match than one 3 km away inside the zone the price was quoted for, and
  * a rider sitting in no service area at all is the last resort rather than a
@@ -1158,6 +1388,15 @@ function zoneAwareRank(riderZoneId, pickupZoneId, distanceKm, zoneOrder = null) 
   else if (riderZoneId && zoneOrder.rankById.has(riderZoneId)) zoneRank = zoneOrder.rankById.get(riderZoneId);
   else zoneRank = zoneOrder.outOfZoneRank;
   return { same_zone: sameZone, zone_rank: zoneRank, rank: zoneRank * 1e6 + distanceKm };
+}
+
+/**
+ * Order for one dispatch wave. A wave already holds a single zone ring, which can
+ * span several neighbouring zones, so the nearest riders in it are offered first;
+ * rating only breaks ties between riders the same distance away.
+ */
+function nearestThenBestRated(a, b) {
+  return (a.distance_km - b.distance_km) || ((b.avg_rating || 0) - (a.avg_rating || 0));
 }
 
 /**
@@ -1351,6 +1590,7 @@ function eligibleNearbyDrivers(lat, lng, radiusKm, options = {}) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
   const pickupZoneId = resolveZoneAt(lat, lng).id;
   const zoneOrder = zoneSearchOrder(lat, lng, pickupZoneId);
+  const snapKm = zoneSnapToleranceKm();
   // exactZoneRank: one dispatch wave asks exactly one zone tier. maxZoneRank: the
   // discovery map shows every tier up to the dispatch depth.
   const exactZoneRank = Number.isFinite(options.exactZoneRank) ? options.exactZoneRank : null;
@@ -1367,7 +1607,7 @@ function eligibleNearbyDrivers(lat, lng, radiusKm, options = {}) {
     .all(`-${freshnessSeconds} seconds`);
   return drivers
     .filter(driver => driver.active_deliveries === 0 && driver.active_rides === 0)
-    .map(driver => ({ ...driver, resolved_zone_id: riderZoneId(driver, zoneOrder.zones) }))
+    .map(driver => ({ ...driver, resolved_zone_id: riderZoneId(driver, zoneOrder.zones, snapKm) }))
     // Same rule as parcel dispatch: a driver outside every service area is not a
     // candidate for a pickup that sits inside one.
     .filter(driver => !pickupZoneId || Boolean(driver.resolved_zone_id))
@@ -1767,11 +2007,12 @@ app.put('/api/rider/status', auth, roleAuth('rider'), route((req, res) => {
   // after a zone edit would be dispatched against a stale service area. Riders with
   // no position yet stay unzoned and undispatchable until their first location post.
   let zone = { id: null, name: null, in_service_area: false };
-  if (['online', 'busy'].includes(requested) && Number.isFinite(rider.current_lat) && Number.isFinite(rider.current_lng)) {
+  if (requested === 'online' && Number.isFinite(rider.current_lat) && Number.isFinite(rider.current_lng)) {
     zone = resolveZoneAt(rider.current_lat, rider.current_lng);
     db.prepare('UPDATE riders SET current_zone_id=?,current_zone_name=? WHERE user_id=?').run(zone.id, zone.name, req.user.id);
-  } else if (requested === 'offline' || requested === 'unavailable') {
-    // An offline rider holds no place in any zone's pool.
+  } else if (requested !== 'online') {
+    // An offline, unavailable or busy rider holds no place in any zone's pool.
+    if (requested === 'busy') zone = unzonedOnJob();
     db.prepare('UPDATE riders SET current_zone_id=NULL,current_zone_name=NULL WHERE user_id=?').run(req.user.id);
   }
 
@@ -1780,7 +2021,7 @@ app.put('/api/rider/status', auth, roleAuth('rider'), route((req, res) => {
     online_status: requested, availability: requested, accepting_offers: requested === 'online',
     // The app needs to know it is online but unzoned (no fix yet, or parked outside
     // every service area) — that state receives no offers and must be visible.
-    zone: { id: zone.id, name: zone.name, in_service_area: zone.in_service_area },
+    zone: zoneDescriptor(zone),
     dispatchable: requested === 'online' && zone.in_service_area
   });
 }));
@@ -1860,7 +2101,7 @@ app.put('/api/rider/location', auth, roleAuth('rider'), (req, res) => {
   if (activeRide) io.to(`ride:${activeRide.id}`).emit('driver_location', { ride_id: activeRide.id, lat: Number(lat), lng: Number(lng) });
   resOK(res, {
     message: 'Location updated',
-    zone: { id: zone.id, name: zone.name, in_service_area: zone.in_service_area },
+    zone: zoneDescriptor(zone),
     tracking: locationTrackingConfig(Boolean(activeDelivery || activeRide))
   });
 });
@@ -1884,6 +2125,7 @@ app.get('/api/mobile/v1/rider/home', auth, roleAuth('rider'), (req, res) => {
     zone: { id: rider.current_zone_id || null, name: rider.current_zone_name || null, in_service_area: zoneKnown },
     dispatchable: rider.online_status === 'online' && zoneKnown,
     reason: rider.approval_status !== 'approved' ? 'not_approved'
+      : rider.online_status === 'busy' ? 'on_job'
       : rider.online_status !== 'online' ? 'not_online'
       : !Number.isFinite(rider.current_lat) || !Number.isFinite(rider.current_lng) ? 'no_location_fix'
       : !zoneKnown ? 'outside_service_area'
@@ -2084,6 +2326,7 @@ function eligibleNearbyRiders(lat, lng, radiusKm, options = {}) {
   const freshnessSeconds = Math.max(1, parseInt(getConfig('rider_location_freshness_sec', '120'), 10) || 120);
   const pickupZoneId = resolveZoneAt(lat, lng).id;
   const zoneOrder = zoneSearchOrder(lat, lng, pickupZoneId);
+  const snapKm = zoneSnapToleranceKm();
   // How many zones deep the caller is willing to look. Dispatch walks this outward
   // (own zone, then the next nearest, then the one after) so an empty home zone
   // falls through to the neighbouring service area instead of to whatever happens
@@ -2102,7 +2345,7 @@ function eligibleNearbyRiders(lat, lng, radiusKm, options = {}) {
     .all(`-${freshnessSeconds} seconds`);
   return riders
     .filter(rider => rider.active_count === 0)
-    .map(rider => ({ ...rider, resolved_zone_id: riderZoneId(rider, zoneOrder.zones) }))
+    .map(rider => ({ ...rider, resolved_zone_id: riderZoneId(rider, zoneOrder.zones, snapKm) }))
     // A rider parked outside every service area is not dispatchable for a pickup
     // that IS inside one: MOVO has no priced relationship with where they are
     // standing. They stay visible to operations, but they are not a candidate.
@@ -2114,7 +2357,10 @@ function eligibleNearbyRiders(lat, lng, radiusKm, options = {}) {
       const { same_zone, zone_rank, rank } = zoneAwareRank(rider.resolved_zone_id, pickupZoneId, distance_km, zoneOrder);
       return { ...rider, distance_km, same_zone, zone_rank, rank };
     })
-    .filter(rider => exactZoneRank !== null
+    // A pickup outside every zone has no rings to walk: a plain radius search applies.
+    .filter(rider => !pickupZoneId
+      ? rider.distance_km <= radiusKm
+      : exactZoneRank !== null
       ? Boolean(rider.resolved_zone_id) && rider.zone_rank === exactZoneRank
       : maxZoneRank !== null
       ? Boolean(rider.resolved_zone_id) && rider.zone_rank <= maxZoneRank
@@ -2158,13 +2404,43 @@ function customerRiderPreview(rider) {
     lat: Math.round(rider.current_lat * 1000) / 1000,
     lng: Math.round(rider.current_lng * 1000) / 1000,
     zone: rider.current_zone_name || null,
-    same_zone: Boolean(rider.same_zone)
+    same_zone: Boolean(rider.same_zone),
+    zone_ring: Number.isFinite(rider.zone_rank) ? rider.zone_rank : null
   };
 }
 
+/**
+ * Places the customer in a service zone from their phone's GPS fix. The app posts
+ * this whenever it gets a fresh fix, the same way the rider app streams position,
+ * so the customer always has a current zone to start a rider search from.
+ */
+app.put('/api/mobile/v1/customer/location', auth, roleAuth('customer'), (req, res) => {
+  const { lat, lng } = req.body || {};
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng)) || Math.abs(Number(lat)) > 90 || Math.abs(Number(lng)) > 180)
+    return resErr(res, 'Valid latitude and longitude required');
+  const accuracy = req.body.accuracy === undefined ? null : Number(req.body.accuracy);
+  const zone = recordCustomerPosition(req.user.id, Number(lat), Number(lng), { accuracy });
+  resOK(res, { message: 'Location updated', zone: zoneDescriptor(zone) });
+});
+
+app.get('/api/mobile/v1/customer/location', auth, roleAuth('customer'), (req, res) => {
+  const position = db.prepare('SELECT lat,lng,accuracy,zone_id,zone_name,updated_at FROM customer_positions WHERE user_id=?').get(req.user.id);
+  if (!position) return resErr(res, 'No location on record yet', 404, 'no_location_fix');
+  resOK(res, {
+    lat: position.lat, lng: position.lng, accuracy: position.accuracy, updated_at: position.updated_at,
+    zone: { id: position.zone_id, name: position.zone_name, in_service_area: Boolean(position.zone_id) }
+  });
+});
+
 app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (req, res) => {
-  const lat = Number(req.query.lat);
-  const lng = Number(req.query.lng);
+  let lat = Number(req.query.lat);
+  let lng = Number(req.query.lng);
+  // With no explicit pickup point the search starts from where the customer's own
+  // GPS last placed them.
+  if (req.query.lat === undefined && req.query.lng === undefined) {
+    const position = db.prepare('SELECT lat,lng FROM customer_positions WHERE user_id=?').get(req.user.id);
+    if (position) { lat = position.lat; lng = position.lng; }
+  }
   const requestedRadius = req.query.radius_km === undefined ? 5 : Number(req.query.radius_km);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
     return resErr(res, 'Valid latitude and longitude required');
@@ -2173,11 +2449,25 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
   // Zone resolution happens right where the customer picks a pickup point (spec
   // §12), not later at quote time — otherwise "no riders nearby" and "MOVO
   // doesn't operate here at all" look identical to the client.
-  const zone = findZone(lat, lng);
-  // The discovery map must show the same pool dispatch would actually reach, so it
-  // walks the same zone tiers: the pickup's own zone first, then the nearest others.
+  const zone = resolveZoneAt(lat, lng);
+  // The search walks outward exactly as dispatch does: riders in the pickup's own
+  // zone first; only if none is free there, riders in the neighbouring zones; only
+  // if none there either, the neighbours of those — up to the configured depth.
+  // The customer is shown the first ring that has anybody in it.
   const maxZoneRank = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
-  const riders = eligibleNearbyRiders(lat, lng, radiusKm, { maxZoneRank });
+  const candidates = eligibleNearbyRiders(lat, lng, radiusKm, { maxZoneRank });
+  let riders = candidates;
+  let searchRing = null;
+  let zonesSearched = [];
+  if (zone.id) {
+    const order = zoneSearchOrder(lat, lng, zone.id);
+    const lastRing = Math.min(maxZoneRank, Math.max(0, order.ringCount - 1));
+    searchRing = candidates.length ? Math.min(...candidates.map(rider => rider.zone_rank)) : lastRing;
+    riders = candidates.filter(rider => rider.zone_rank === searchRing);
+    zonesSearched = order.ranked
+      .filter(ranked => ranked.ring <= searchRing)
+      .map(ranked => ({ id: ranked.id, name: ranked.name, ring: ranked.ring }));
+  }
   resOK(res, {
     rider_count: riders.length,
     // Riders already inside the pickup's own zone are the ones dispatch will reach
@@ -2185,10 +2475,14 @@ app.get('/api/mobile/v1/customer/nearby-riders', auth, roleAuth('customer'), (re
     in_zone_rider_count: riders.filter(rider => rider.same_zone).length,
     nearest_km: riders.length ? riders[0].distance_km : null,
     radius_km: radiusKm,
+    // 0 = found in the pickup's own zone, 1 = in a neighbouring zone, and so on;
+    // null when the pickup is outside every zone and a plain radius was searched.
+    search_ring: searchRing,
+    zones_searched: zonesSearched,
     // The customer picks the rider they are handing the parcel to; each entry is a
     // mappable marker with the facts needed to choose, never a contactable profile.
     riders: riders.map(customerRiderPreview),
-    in_service_area: Boolean(zone), zone: zone ? { id: zone.id, name: zone.name } : null,
+    in_service_area: zone.in_service_area, zone: zone.id ? { id: zone.id, name: zone.name, placement: zone.placement } : null,
     serverTime: new Date().toISOString()
   });
 });
@@ -2417,7 +2711,7 @@ app.put('/api/deliveries/:id/accept', auth, roleAuth('rider'), (req, res) => {
     return true;
   });
   if (!acceptOffer()) return resErr(res, 'Offer is unavailable or already accepted', 409);
-  db.prepare("UPDATE riders SET online_status='busy',availability='busy',accepted_offers=COALESCE(accepted_offers,0)+1 WHERE user_id=?").run(req.user.id);
+  markRiderBusy(req.user.id, 'accepted_offers=COALESCE(accepted_offers,0)+1');
   notifyUser(d.customer_id, 'rider_assigned', 'Rider Assigned', `A rider has been assigned to your delivery ${d.order_no}`, { delivery_id: d.id });
   notifyDeliveryParticipant(d, 'rider_assigned', 'Delivery on the way', `A MOVO rider is collecting a ${d.service_type} addressed to you (${d.order_no}).`);
   emitDeliveryUpdate(d.id, { status: 'assigned', rider_id: req.user.id });
@@ -2746,7 +3040,7 @@ app.put('/api/rides/:id/accept', auth, roleAuth('rider'), route((req, res) => {
     return true;
   })();
   if (!claimed) return resErr(res, 'Offer is unavailable or already accepted', 409, 'offer_unavailable');
-  db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(req.user.id);
+  markRiderBusy(req.user.id);
   notifyUser(ride.customer_id, 'driver_assigned', 'Driver assigned', `A driver is on the way for your ride ${ride.ride_no}`, { ride_id: ride.id });
   emitRideUpdate(ride.id, { status: 'assigned', driver_id: req.user.id });
   resOK(res, { message: 'Ride accepted', ride: db.prepare('SELECT * FROM rides WHERE id=?').get(ride.id) });
@@ -3114,6 +3408,9 @@ app.put('/api/admin/deliveries/:id', auth, roleAuth('admin'), (req, res) => {
   const d = db.prepare('SELECT * FROM deliveries WHERE id=?').get(req.params.id);
   if (!d) return resErr(res, 'Not found', 404);
   updateDeliveryStatus(d.id, status, { note: note || 'Admin update' });
+  // Closing a job from the console ends it for the rider too: back into the pool,
+  // re-zoned where they stand, unless they are still carrying other work.
+  if (['delivered', 'cancelled', 'failed'].includes(status)) releaseRiderIfIdle(d.rider_id);
   audit(req.user.id, 'admin_status_change', 'delivery', d.id, { from: d.status, to: status });
   resOK(res, { message: 'Status updated' });
 });
@@ -3130,7 +3427,7 @@ app.put('/api/admin/deliveries/:id/reassign', auth, roleAuth('admin'), route((re
   db.transaction(() => {
     db.prepare("UPDATE deliveries SET rider_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=?").run(riderId, d.id);
     db.prepare("UPDATE delivery_offers SET status='expired',responded_at=datetime('now') WHERE delivery_id=? AND status='offered'").run(d.id);
-    db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(riderId);
+    markRiderBusy(riderId);
     if (previousRider && previousRider !== riderId) returnRiderToPool(previousRider);
     addEvent(d.id, 'assigned', null, null, `Reassigned by operations to ${rider.full_name}`);
   })();
@@ -3165,6 +3462,7 @@ app.put('/api/admin/rides/:id', auth, roleAuth('admin'), (req, res) => {
   const ride = db.prepare('SELECT * FROM rides WHERE id=?').get(req.params.id);
   if (!ride) return resErr(res, 'Not found', 404);
   updateRideStatus(ride.id, status, { note: note || 'Admin update' });
+  if (['completed', 'cancelled'].includes(status)) releaseRiderIfIdle(ride.driver_id);
   audit(req.user.id, 'admin_ride_status_change', 'ride', ride.id, { from: ride.status, to: status });
   resOK(res, { message: 'Status updated' });
 });
@@ -3180,7 +3478,7 @@ app.put('/api/admin/rides/:id/reassign', auth, roleAuth('admin'), route((req, re
   db.transaction(() => {
     db.prepare("UPDATE rides SET driver_id=?,status='assigned',assigned_at=datetime('now'),updated_at=datetime('now') WHERE id=?").run(driverId, ride.id);
     db.prepare("UPDATE ride_offers SET status='expired',responded_at=datetime('now') WHERE ride_id=? AND status='offered'").run(ride.id);
-    db.prepare("UPDATE riders SET online_status='busy',availability='busy' WHERE user_id=?").run(driverId);
+    markRiderBusy(driverId);
     if (previousDriver && previousDriver !== driverId) returnRiderToPool(previousDriver);
     addRideEvent(ride.id, 'assigned', null, null, `Reassigned by operations to ${driver.full_name}`);
   })();
@@ -3323,7 +3621,10 @@ app.get('/api/admin/kpis', auth, roleAuth('admin'), route((req, res) => {
 }));
 
 app.get('/api/admin/zones', auth, roleAuth('admin'), (req, res) => {
-  resOK(res, db.prepare('SELECT * FROM delivery_zones ORDER BY sort_order').all());
+  // Each active zone lists the zones rider search falls back to when it is empty.
+  const graph = zoneNeighbourGraph(activeZones());
+  resOK(res, db.prepare('SELECT * FROM delivery_zones ORDER BY sort_order').all()
+    .map(zone => ({ ...zone, neighbour_zone_ids: [...(graph.get(zone.id) || [])] })));
 });
 
 /**
@@ -3573,6 +3874,20 @@ function offerDeliveryToRider(delivery, rider, timeoutSeconds) {
  * stranger" failure the preferred-rider flow exists to prevent. A rider the
  * customer could see and select must be reachable when they select them.
  */
+/**
+ * How many rings outward dispatch may walk from a pickup: the configured depth,
+ * but never past the outermost ring the zone graph actually has, so a search that
+ * has already covered every zone fails promptly instead of idling through empty
+ * waves.
+ */
+function searchDepthFor(lat, lng) {
+  const configured = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
+  const pickupZoneId = resolveZoneAt(lat, lng).id;
+  if (!pickupZoneId) return configured;
+  const { ringCount } = zoneSearchOrder(lat, lng, pickupZoneId);
+  return Math.min(configured, Math.max(0, ringCount - 1));
+}
+
 function findDispatchableRider(riderId, lat, lng) {
   if (!riderId) return null;
   return eligibleNearbyRiders(lat, lng, Infinity).find(rider => rider.id === riderId) || null;
@@ -3588,10 +3903,11 @@ function dispatchDelivery(deliveryId) {
   const maxRadius = radius + expandStep * 3;
   const timeoutSeconds = parseInt(getConfig('rider_accept_timeout_sec', '30'));
   // Zone-first search: wave 0 asks only the pickup's own zone, and each expansion
-  // admits the next-nearest zone as well as a wider radius. Capped so a parcel in
-  // Kigali is never offered to a rider in a far-flung service area.
+  // moves one ring outward across the zone graph — the neighbouring zones, then
+  // their neighbours. Capped so a parcel in Kigali is never offered to a rider in
+  // a far-flung service area, and never past the outermost ring that exists.
   let zoneRank = 0;
-  const maxZoneRank = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
+  const maxZoneRank = searchDepthFor(Number(d.pickup_lat), Number(d.pickup_lng));
   // A customer who picked a rider off the discovery map gets that rider offered the
   // job first, alone, before anyone else is approached. The preference is consumed
   // once honoured or once it becomes impossible (the rider went offline or stale),
@@ -3623,14 +3939,14 @@ function dispatchDelivery(deliveryId) {
       preferredRiderId = null;
     }
 
-    // Wave 0 is the pickup's own zone only (radius 0 admits nobody on distance
-    // alone); later waves widen both the zone depth and the kilometre fallback.
+    // Each wave asks exactly one ring: wave 0 the pickup's own zone, wave 1 its
+    // neighbouring zones, and so on (the radius only matters for an unzoned pickup).
     const nearby = eligibleNearbyRiders(
       Number(d.pickup_lat), Number(d.pickup_lng),
       zoneRank === 0 ? 0 : radius,
       { exactZoneRank: zoneRank }
     ).filter(candidate => !db.prepare('SELECT id FROM delivery_offers WHERE delivery_id=? AND rider_id=?').get(deliveryId, candidate.id))
-      .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
+      .sort(nearestThenBestRated);
 
     const canExpand = () => zoneRank < maxZoneRank;
     const expand = () => {
@@ -3670,10 +3986,10 @@ function dispatchRide(rideId) {
   let radius = parseFloat(getConfig('ride_driver_search_radius_km', '6'));
   const expandStep = parseFloat(getConfig('ride_driver_search_expand_km', '2'));
   const maxRadius = radius + expandStep * 3;
-  // Zone-first, exactly as parcel dispatch: the pickup's own zone first, then the
-  // next-nearest service area on each expansion.
+  // Zone-first, exactly as parcel dispatch: the pickup's own zone first, then one
+  // ring of neighbouring zones further out on each expansion.
   let zoneRank = 0;
-  const maxZoneRank = Math.max(0, parseInt(getConfig('rider_search_max_zone_depth', '3'), 10) || 0);
+  const maxZoneRank = searchDepthFor(Number(ride.pickup_lat), Number(ride.pickup_lng));
 
   const pickupZoned = Boolean(resolveZoneAt(Number(ride.pickup_lat), Number(ride.pickup_lng)).id);
   function canExpand() { return zoneRank < maxZoneRank; }
@@ -3690,7 +4006,7 @@ function dispatchRide(rideId) {
       zoneRank === 0 && pickupZoned ? 0 : radius,
       { exactZoneRank: zoneRank }
     ).filter(candidate => !db.prepare('SELECT id FROM ride_offers WHERE ride_id=? AND driver_id=?').get(rideId, candidate.id))
-      .sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
+      .sort(nearestThenBestRated);
 
     if (nearby.length > 0) {
       const timeoutSeconds = parseInt(getConfig('ride_driver_accept_timeout_sec', '25'), 10) || 25;
@@ -3746,6 +4062,34 @@ function releaseScheduledDeliveries() {
 
 const scheduleTimer = setInterval(releaseScheduledDeliveries, 30_000);
 if (typeof scheduleTimer.unref === 'function') scheduleTimer.unref();
+
+/**
+ * Periodic re-zoning sweep. Every GPS fix already re-zones its sender on arrival;
+ * this sweep additionally re-places every available rider and every customer from
+ * their latest stored position on a fixed cadence (default every 5 minutes), so
+ * zone assignment stays current even for a phone that has gone quiet, and so a
+ * rider who is busy on a job is kept out of every zone until the job ends.
+ */
+function zoneRefreshIntervalMs() {
+  const seconds = parseInt(process.env.ZONE_REFRESH_INTERVAL_SEC || getConfig('zone_refresh_interval_sec', '300'), 10);
+  return (Number.isFinite(seconds) && seconds >= 1 ? seconds : 300) * 1000;
+}
+
+function runZoneRefresh() {
+  try {
+    const riders = refreshRiderZones();
+    logger.debug('zone_refresh', { riders_rezoned: riders });
+  } catch (error) {
+    logger.error('zone_refresh_failed', { message: error.message });
+  }
+}
+
+let zoneRefreshTimer = null;
+function scheduleZoneRefresh() {
+  zoneRefreshTimer = setTimeout(() => { runZoneRefresh(); scheduleZoneRefresh(); }, zoneRefreshIntervalMs());
+  if (typeof zoneRefreshTimer.unref === 'function') zoneRefreshTimer.unref();
+}
+scheduleZoneRefresh();
 
 // ─── WebSocket ───────────────────────────────────────────────
 io.on('connection', (socket) => {

@@ -204,10 +204,18 @@ test('a rider in the pickup zone outranks a closer rider from another zone', asy
   const nearby = await request(`/api/mobile/v1/customer/nearby-riders?lat=${pickup.lat}&lng=${pickup.lng}&radius_km=10`, { token: customer.token });
   assert.equal(nearby.response.status, 200, nearby.json.error);
   const listed = nearby.json.data.riders;
-  assert.equal(listed[0].id, inZone.id, 'the in-zone rider leads even though the other one is closer');
-  assert.ok(listed[0].distance_km > listed[1].distance_km, 'fixture: the in-zone rider really is the farther one');
+  // The search stops at the first ring that has a rider: the pickup's own zone.
+  assert.equal(nearby.json.data.search_ring, 0);
+  assert.deepEqual(listed.map(rider => rider.id), [inZone.id], 'only the in-zone rider is offered while the pickup zone has one');
   assert.equal(listed[0].same_zone, true);
-  assert.equal(listed[1].same_zone, false);
+
+  // With the pickup zone empty, the search moves out to the neighbouring zones.
+  await request('/api/rider/status', { method: 'PUT', token: inZone.token, body: { status: 'offline' } });
+  const widened = await request(`/api/mobile/v1/customer/nearby-riders?lat=${pickup.lat}&lng=${pickup.lng}&radius_km=10`, { token: customer.token });
+  assert.equal(widened.json.data.search_ring, 1);
+  assert.deepEqual(widened.json.data.riders.map(rider => rider.id), [outZone.id]);
+  assert.equal(widened.json.data.riders[0].same_zone, false);
+  assert.ok(widened.json.data.riders[0].distance_km < listed[0].distance_km, 'fixture: the neighbour-zone rider really is the closer one');
 });
 
 test('an empty pickup zone falls through to the next nearest zone, not to a flat radius', async () => {
@@ -360,11 +368,11 @@ test('a rider streaming position over the socket is zoned exactly like the REST 
 
   const stored = db.prepare('SELECT current_lat,current_zone_id FROM riders WHERE user_id=?').get(rider.id);
   assert.equal(Math.round(stored.current_lat * 1e4), Math.round(moved.lat * 1e4), 'the socket fix is persisted');
-  assert.ok(stored.current_zone_id, 'a socket fix must carry a resolved zone, never a null one');
-  assert.notEqual(stored.current_zone_id, startZone, 'the rider moved zones, so the cached zone must move with them');
+  // Exactly like the REST path, a rider busy on a job holds no zone until it ends.
+  assert.equal(stored.current_zone_id, null, 'a busy rider is not placed in any zone mid-job');
 
   const expected = await zoneAt(customer.token, moved.lat, moved.lng);
-  assert.equal(stored.current_zone_id, expected.id, 'socket ingest must resolve the same zone the REST path would');
+  assert.notEqual(expected.id, startZone, 'fixture: the rider moved zones');
 
   // The history row carries the zone too, so operations can replay where a rider was.
   const trail = db.prepare('SELECT zone_id FROM rider_locations WHERE rider_id=? ORDER BY rowid DESC LIMIT 1').get(rider.id);
@@ -410,7 +418,8 @@ test('a rider returned to the pool after a delivery is zoned at the drop-off, no
   // The rider is now standing at the drop-off, in a different zone.
   const atDropoff = await request('/api/rider/location', { method: 'PUT', token: rider.token, body: { lat: dest.lat, lng: dest.lng } });
   assert.equal(atDropoff.response.status, 200, atDropoff.json.error);
-  const destZone = atDropoff.json.data.zone.id;
+  assert.equal(atDropoff.json.data.zone.id, null, 'mid-job the rider holds no zone');
+  const destZone = (await zoneAt(customer.token, dest.lat, dest.lng)).id;
   assert.notEqual(destZone, pickupZone, 'fixture: the drop-off is in a different zone from the pickup');
 
   // Simulate the cache having gone stale during the job — which is exactly what a
@@ -553,15 +562,18 @@ test('a rider the customer could see and pick is honoured however far away they 
   t.after(() => db.prepare('INSERT OR REPLACE INTO pricing_config (key,value) VALUES (?,?)').run('rider_search_max_zone_depth', previousDepth));
 
   const chosen = await riderAt(far.lat, far.lng);
-  const nearer = await riderAt(pickup.lat, pickup.lng);
   assert.equal(chosen.zone.name, 'Far Pick Zone', 'fixture: the chosen rider sits in the far zone');
 
-  // The customer can genuinely see and select this rider on the discovery map.
+  // The customer can genuinely see and select this rider on the discovery map:
+  // every nearer zone is empty, so the search walked out to the far zone.
   const discovery = await request(`/api/mobile/v1/customer/nearby-riders?lat=${pickup.lat}&lng=${pickup.lng}&radius_km=20`, { token: customer.token });
   assert.equal(discovery.response.status, 200, discovery.json.error);
   const offered = discovery.json.data.riders.find(rider => rider.id === chosen.id);
   assert.ok(offered, 'the far rider is presented to the customer as a choice');
   assert.ok(offered.distance_km > 11, 'fixture: they are beyond the dispatch search radius');
+
+  // A nearer rider comes online after the customer has already made their choice.
+  const nearer = await riderAt(pickup.lat, pickup.lng);
 
   const created = await request('/api/deliveries', {
     method: 'POST', token: customer.token,
