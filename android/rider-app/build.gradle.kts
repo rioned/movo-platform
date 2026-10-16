@@ -9,7 +9,7 @@ android {
     kotlinOptions { jvmTarget = "21" }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
     // Both installable variants always use the official MOVO API provider.
-    val movoApiBaseUrl = "https://movo-vervice.tech"
+    val movoApiBaseUrl = "https://movo-rwanda.tech"
     // Optional MapTiler key for hosted map tiles (see MapTileSources in :design);
     // unset means the map falls back to osmdroid's default Mapnik tiles. Set it via
     // -PmaptilerApiKey=... or a maptilerApiKey= line in ~/.gradle/gradle.properties

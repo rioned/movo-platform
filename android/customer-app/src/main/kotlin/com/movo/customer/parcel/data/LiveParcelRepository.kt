@@ -161,7 +161,7 @@ class LiveParcelRepository internal constructor(private val transport: ParcelTra
                     session.token?.let { request.header("Authorization", "Bearer $it") }
                     chain.proceed(request.build())
                 }.build()
-            val api = Retrofit.Builder().baseUrl("https://movo-vervice.tech/").client(client).addConverterFactory(MoshiConverterFactory.create(moshi)).build().create(ParcelRest::class.java)
+            val api = Retrofit.Builder().baseUrl("https://movo-rwanda.tech/").client(client).addConverterFactory(MoshiConverterFactory.create(moshi)).build().create(ParcelRest::class.java)
             val transport = ParcelTransport { method, path, body, key -> withContext(Dispatchers.IO) {
                 ParcelWire.unwrap(when (method) { "POST" -> api.post(path, body.orEmpty(), key); "PUT" -> api.put(path, body.orEmpty()); "DELETE" -> api.delete(path); else -> api.get(path) })
             } }

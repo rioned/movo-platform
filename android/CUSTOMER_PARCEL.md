@@ -13,7 +13,7 @@ adb shell am start -n com.movo.customer/.MainActivity
 
 Use **Explore demo** on phone sign-in for the offline sandbox. It does not submit orders, authenticate to production, contact a Rider or charge money. Search Kigali, Kimironko or Airport. A created demo parcel moves from searching through assignment, pickup, transit and delivery over roughly 70 seconds. Completed deliveries can be rated. Demo state is intentionally in-memory and resets when the process ends.
 
-The live origin is fixed to `https://movo-vervice.tech/`; there is no API-origin override. No production OTP requests, bookings, payments, support submissions or deployments are performed by build/test commands.
+The live origin is fixed to `https://movo-rwanda.tech/`; there is no API-origin override. No production OTP requests, bookings, payments, support submissions or deployments are performed by build/test commands.
 
 ## Architecture
 
