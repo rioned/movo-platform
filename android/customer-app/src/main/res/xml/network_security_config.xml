@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The production backend is served over movo-vervice.tech with a publicly-trusted Let's
+  The production backend is served over movo-rwanda.tech with a publicly-trusted Let's
   Encrypt certificate, so system trust anchors are sufficient — no custom CA pinning needed.
   Cleartext to this host is still explicitly refused here, regardless of the debug-only
   usesCleartextTraffic override in src/debug/AndroidManifest.xml, so a debug build pointed
@@ -8,7 +8,7 @@
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">movo-vervice.tech</domain>
+        <domain includeSubdomains="true">movo-rwanda.tech</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
