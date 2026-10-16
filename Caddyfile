@@ -11,3 +11,7 @@ movo-vervice.tech, www.movo-vervice.tech {
 	redir https://31.97.111.156{uri} permanent
 }
 
+
+movo-rwanda.tech {
+	reverse_proxy movo:3000
+}
